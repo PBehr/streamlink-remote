@@ -6,7 +6,7 @@ RUN apk add --no-cache \
     python3 \
     py3-pip \
     ffmpeg \
-    && pip3 install --no-cache-dir streamlink
+    && pip3 install --break-system-packages --no-cache-dir streamlink
 
 # Set working directory
 WORKDIR /app
