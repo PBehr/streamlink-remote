@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+	<title>Streamlink Remote</title>
+	<link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+	<div id="app">
+		<!-- Header -->
+		<header class="header">
+			<div class="header-content">
+				<h1 class="logo">📺 Streamlink Remote</h1>
+				<div class="header-actions">
+					<button id="refresh-btn" class="btn btn-icon" title="Refresh">
+						<span class="icon">🔄</span>
+					</button>
+					<div id="auth-status" class="auth-status"></div>
+				</div>
+			</div>
+		</header>
+
+		<!-- Navigation -->
+		<nav class="nav">
+			<button class="nav-item active" data-view="live">
+				<span class="icon">🔴</span>
+				Live
+			</button>
+			<button class="nav-item" data-view="featured">
+				<span class="icon">⭐</span>
+				Featured
+			</button>
+			<button class="nav-item" data-view="active">
+				<span class="icon">▶️</span>
+				Active
+				<span id="active-count" class="badge">0</span>
+			</button>
+			<button class="nav-item" data-view="search">
+				<span class="icon">🔍</span>
+				Search
+			</button>
+			<button class="nav-item" data-view="settings">
+				<span class="icon">⚙️</span>
+				Settings
+			</button>
+		</nav>
+
+		<!-- Main Content -->
+		<main class="main">
+			<!-- Loading State -->
+			<div id="loading" class="loading hidden">
+				<div class="spinner"></div>
+				<p>Loading...</p>
+			</div>
+
+			<!-- Live Streams View -->
+			<div id="view-live" class="view active">
+				<div class="view-header">
+					<h2>Live Streams from Followed Channels</h2>
+				</div>
+				<div id="live-streams" class="stream-grid"></div>
+				<div id="live-empty" class="empty-state hidden">
+					<p>No live streams from your followed channels</p>
+					<p class="text-muted">Try the Featured tab or Search for channels</p>
+				</div>
+			</div>
+
+			<!-- Featured Streams View -->
+			<div id="view-featured" class="view">
+				<div class="view-header">
+					<h2>Featured Streams</h2>
+				</div>
+				<div id="featured-streams" class="stream-grid"></div>
+			</div>
+
+			<!-- Active Streams View -->
+			<div id="view-active" class="view">
+				<div class="view-header">
+					<h2>Currently Playing</h2>
+				</div>
+				<div id="active-streams" class="active-streams-list"></div>
+				<div id="active-empty" class="empty-state hidden">
+					<p>No streams currently playing</p>
+					<p class="text-muted">Start a stream from the Live or Featured tabs</p>
+				</div>
+			</div>
+
+			<!-- Search View -->
+			<div id="view-search" class="view">
+				<div class="view-header">
+					<div class="search-box">
+						<input type="text" id="search-input" placeholder="Search for channels..." class="search-input">
+						<button id="search-btn" class="btn btn-primary">Search</button>
+					</div>
+				</div>
+				<div id="search-results" class="stream-grid"></div>
+				<div id="search-empty" class="empty-state hidden">
+					<p>Enter a channel name to search</p>
+				</div>
+			</div>
+
+			<!-- Settings View -->
+			<div id="view-settings" class="view">
+				<div class="view-header">
+					<h2>Settings</h2>
+				</div>
+				<div class="settings-container">
+					<div class="setting-group">
+						<h3>Account</h3>
+						<div id="account-info" class="account-info"></div>
+					</div>
+
+					<div class="setting-group">
+						<h3>Stream Quality</h3>
+						<select id="quality-select" class="select">
+							<option value="best">Best</option>
+							<option value="1080p60">1080p60</option>
+							<option value="1080p">1080p</option>
+							<option value="720p60">720p60</option>
+							<option value="720p">720p</option>
+							<option value="480p">480p</option>
+							<option value="360p">360p</option>
+							<option value="worst">Worst</option>
+						</select>
+					</div>
+
+					<div class="setting-group">
+						<h3>Low Latency</h3>
+						<label class="checkbox">
+							<input type="checkbox" id="low-latency-check">
+							<span>Enable Twitch low latency mode</span>
+						</label>
+					</div>
+
+					<div class="setting-group">
+						<button id="save-settings-btn" class="btn btn-primary">Save Settings</button>
+					</div>
+				</div>
+			</div>
+		</main>
+	</div>
+
+	<!-- Stream Modal -->
+	<div id="stream-modal" class="modal hidden">
+		<div class="modal-overlay"></div>
+		<div class="modal-content">
+			<button class="modal-close">&times;</button>
+			<div id="modal-body"></div>
+		</div>
+	</div>
+
+	<!-- Toast Notifications -->
+	<div id="toast-container" class="toast-container"></div>
+
+	<script src="/js/api.js"></script>
+	<script src="/js/websocket.js"></script>
+	<script src="/js/app.js"></script>
+</body>
+</html>

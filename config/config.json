@@ -1,0 +1,24 @@
+{
+  "server": {
+    "port": 3000,
+    "host": "0.0.0.0",
+    "streamPortStart": 8080,
+    "streamPortEnd": 8089
+  },
+  "twitch": {
+    "clientId": "rcwnaeun1r5fy05i4asigaorjm5ho3",
+    "redirectUri": "http://localhost:3000/auth/callback",
+    "scopes": ["user:read:follows"],
+    "apiBaseUrl": "https://api.twitch.tv/helix"
+  },
+  "streamlink": {
+    "executable": "C:\\Users\\pgrea\\AppData\\Roaming\\streamlink\\bin\\streamlink.exe",
+    "defaultQuality": "best",
+    "timeout": 60,
+    "retryStreams": 1,
+    "retryOpen": 1
+  },
+  "database": {
+    "path": "./data/streamlink-remote.db"
+  }
+}
