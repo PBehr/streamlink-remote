@@ -5,8 +5,8 @@ services:
     build: .
     container_name: streamlink-remote
     ports:
-      - "${SERVER_PORT:-3000}:3000"
-      - "${STREAM_PORT_START:-8080}-${STREAM_PORT_END:-8089}:8080-8089"
+      - "${SERVER_PORT:-3000}:${SERVER_PORT:-3000}"
+      - "${STREAM_PORT_START:-8080}-${STREAM_PORT_END:-8089}:${STREAM_PORT_START:-8080}-${STREAM_PORT_END:-8089}"
     volumes:
       - ./data:/app/data
       - ./config:/app/config
