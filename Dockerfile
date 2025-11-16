@@ -8,7 +8,10 @@ RUN apk add --no-cache \
     ffmpeg \
     git \
     && pip3 install --break-system-packages --no-cache-dir streamlink \
-    && pip3 install --break-system-packages --no-cache-dir git+https://github.com/2bc4/streamlink-ttvlol.git
+    && git clone https://github.com/2bc4/streamlink-ttvlol.git /tmp/streamlink-ttvlol \
+    && STREAMLINK_PLUGIN_DIR=$(python3 -c "import streamlink.plugins; import os; print(os.path.dirname(streamlink.plugins.__file__))") \
+    && cp /tmp/streamlink-ttvlol/twitch.py $STREAMLINK_PLUGIN_DIR/twitch.py \
+    && rm -rf /tmp/streamlink-ttvlol
 
 # Set working directory
 WORKDIR /app
