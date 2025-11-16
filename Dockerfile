@@ -6,7 +6,9 @@ RUN apk add --no-cache \
     python3 \
     py3-pip \
     ffmpeg \
-    && pip3 install --break-system-packages --no-cache-dir streamlink
+    git \
+    && pip3 install --break-system-packages --no-cache-dir streamlink \
+    && pip3 install --break-system-packages --no-cache-dir git+https://github.com/2bc4/streamlink-ttvlol.git
 
 # Set working directory
 WORKDIR /app

@@ -73,7 +73,7 @@ class StreamlinkManager extends EventEmitter {
 			"--player-external-http-port",
 			String(port),
 			"--twitch-disable-ads",
-			"--twitch-proxy-playlist=https://eu.luminous.dev,https://lb-eu.cdn-perfprod.com",
+			"--twitch-api-header=Authorization=OAuth sqp4ii87lfsgabaz4bu4u6wahe0xhe",
 			"--retry-streams",
 			String(this.config.retryStreams),
 			"--retry-open",
