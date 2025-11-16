@@ -10,7 +10,11 @@ RUN apk add --no-cache \
     && pip3 install --break-system-packages --no-cache-dir streamlink \
     && git clone https://github.com/2bc4/streamlink-ttvlol.git /tmp/streamlink-ttvlol \
     && STREAMLINK_PLUGIN_DIR=$(python3 -c "import streamlink.plugins; import os; print(os.path.dirname(streamlink.plugins.__file__))") \
-    && cp /tmp/streamlink-ttvlol/twitch.py $STREAMLINK_PLUGIN_DIR/twitch.py \
+    && echo "Plugin directory: $STREAMLINK_PLUGIN_DIR" \
+    && ls -la /tmp/streamlink-ttvlol/ \
+    && cp -v /tmp/streamlink-ttvlol/twitch.py $STREAMLINK_PLUGIN_DIR/twitch.py \
+    && echo "Verifying plugin installation:" \
+    && ls -la $STREAMLINK_PLUGIN_DIR/twitch.py \
     && rm -rf /tmp/streamlink-ttvlol
 
 # Set working directory
