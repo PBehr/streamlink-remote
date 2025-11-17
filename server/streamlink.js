@@ -61,7 +61,9 @@ class StreamlinkManager extends EventEmitter {
 
 		const streamQuality = quality || this.config.defaultQuality;
 		const port = this.getNextPort();
-		const streamHost = this.serverConfig.host === "0.0.0.0" ? this.getLocalIpAddress() : this.serverConfig.host;
+		// Use EXTERNAL_HOST env var if set, otherwise auto-detect
+		const streamHost = process.env.EXTERNAL_HOST ||
+		                   (this.serverConfig.host === "0.0.0.0" ? this.getLocalIpAddress() : this.serverConfig.host);
 		const url = `http://${streamHost}:${port}/`;
 
 		const args = [
