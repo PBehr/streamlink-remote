@@ -6,10 +6,16 @@ RUN apk add --no-cache \
     python3 \
     py3-pip \
     ffmpeg \
-    git \
-    && pip3 install --break-system-packages --no-cache-dir streamlink \
-    && git clone https://github.com/2bc4/streamlink-ttvlol.git /tmp/streamlink-ttvlol \
-    && STREAMLINK_PLUGIN_DIR=$(python3 -c "import streamlink.plugins; import os; print(os.path.dirname(streamlink.plugins.__file__))") \
+    git
+
+# Install streamlink
+RUN pip3 install --break-system-packages --no-cache-dir streamlink
+
+# Clone ttvlol plugin
+RUN git clone https://github.com/2bc4/streamlink-ttvlol.git /tmp/streamlink-ttvlol
+
+# Install the plugin
+RUN STREAMLINK_PLUGIN_DIR=$(python3 -c "import streamlink.plugins; import os; print(os.path.dirname(streamlink.plugins.__file__))") \
     && echo "=== Plugin Installation Debug ===" \
     && echo "Plugin directory: $STREAMLINK_PLUGIN_DIR" \
     && echo "Contents of ttvlol repo:" \
@@ -22,7 +28,7 @@ RUN apk add --no-cache \
     && echo "Verifying installation:" \
     && ls -lh $STREAMLINK_PLUGIN_DIR/twitch.py \
     && echo "Checking for proxy-playlist in plugin:" \
-    && grep -q "proxy-playlist" $STREAMLINK_PLUGIN_DIR/twitch.py && echo "✓ proxy-playlist found in plugin" || echo "✗ proxy-playlist NOT found" \
+    && grep -c "proxy-playlist" $STREAMLINK_PLUGIN_DIR/twitch.py \
     && echo "Testing streamlink with --help:" \
     && streamlink --help | grep -i proxy || echo "No proxy option found in help" \
     && rm -rf /tmp/streamlink-ttvlol \
