@@ -13,12 +13,12 @@ RUN pip3 install --break-system-packages --no-cache-dir streamlink
 
 # Clone ttvlol plugin and install to user plugins directory
 RUN git clone https://github.com/2bc4/streamlink-ttvlol.git /tmp/streamlink-ttvlol \
-    && mkdir -p /root/.streamlink/plugins \
-    && cp /tmp/streamlink-ttvlol/twitch.py /root/.streamlink/plugins/twitch.py \
+    && mkdir -p /root/.local/share/streamlink/plugins \
+    && cp /tmp/streamlink-ttvlol/twitch.py /root/.local/share/streamlink/plugins/twitch.py \
     && echo "=== Plugin Installation ===" \
-    && echo "✓ Copied twitch.py to /root/.streamlink/plugins/" \
-    && ls -lh /root/.streamlink/plugins/twitch.py \
-    && grep -c "proxy-playlist" /root/.streamlink/plugins/twitch.py \
+    && echo "✓ Copied twitch.py to /root/.local/share/streamlink/plugins/" \
+    && ls -lh /root/.local/share/streamlink/plugins/twitch.py \
+    && grep -c "proxy-playlist" /root/.local/share/streamlink/plugins/twitch.py \
     && rm -rf /tmp/streamlink-ttvlol
 
 # Set working directory
