@@ -457,12 +457,13 @@ class App {
 
 	renderActiveStreamCard(stream) {
 		const uptime = this.formatUptime(stream.uptime);
+		const channelName = this.escapeHtml(stream.channel);
 
 		return `
 			<div class="active-stream-card" data-channel="${stream.channel}">
 				<div class="active-stream-header">
 					<div class="active-stream-info">
-						<h3>${this.escapeHtml(stream.channel)}</h3>
+						<h3>${channelName}</h3>
 						<div class="active-stream-quality">Quality: ${stream.quality} • Uptime: ${uptime}</div>
 					</div>
 				</div>
@@ -471,8 +472,10 @@ class App {
 					<button class="btn btn-small" onclick="app.copyToClipboard('${stream.url}')">Copy</button>
 				</div>
 				<div class="active-stream-actions">
-					<button class="btn btn-small" onclick="app.openInPlayer('${stream.url}')">Open in VLC</button>
-					<button class="btn btn-error btn-small" onclick="app.stopStream('${stream.channel}')">Stop Stream</button>
+					<button class="btn btn-primary btn-small" onclick="app.openInPlayer('${stream.url}')">
+						<span class="icon">📺</span> VLC
+					</button>
+					<button class="btn btn-error btn-small" onclick="app.stopStream('${stream.channel}')">Stop</button>
 				</div>
 			</div>
 		`;
@@ -506,20 +509,23 @@ class App {
 	showStreamModal(channel, username, result) {
 		const modal = document.getElementById("stream-modal");
 		const modalBody = document.getElementById("modal-body");
+		const displayName = this.escapeHtml(username || channel);
 
 		modalBody.innerHTML = `
-			<h2>🎬 ${this.escapeHtml(username || channel)}</h2>
+			<h2>🎬 ${displayName}</h2>
 			<p>Stream is now running!</p>
 			<div class="active-stream-url">
 				<code>${result.url}</code>
 				<button class="btn btn-small" onclick="app.copyToClipboard('${result.url}')">Copy</button>
 			</div>
-			<div style="margin-top: 1rem;">
-				<button class="btn btn-primary" onclick="app.openInPlayer('${result.url}')">Open in VLC</button>
+			<div class="stream-modal-actions">
+				<button class="btn btn-primary" onclick="app.openInPlayer('${result.url}')">
+					<span class="icon">📺</span> Open in VLC
+				</button>
 				<button class="btn" onclick="app.closeModal()">Close</button>
 			</div>
 			<p style="margin-top: 1rem; color: var(--text-muted); font-size: 0.875rem;">
-				💡 Tip: You can find this URL in the "Active" tab
+				💡 Tip: You can find this stream in the "Active" tab
 			</p>
 		`;
 
@@ -550,11 +556,8 @@ class App {
 	}
 
 	openInPlayer(url) {
-		// Try to open VLC URL scheme
+		// Open VLC URL scheme (works on iOS/iPad with VLC installed)
 		window.location.href = `vlc://${url}`;
-
-		// Also show toast with URL
-		this.showToast(`Opening in VLC: ${url}`, "success");
 	}
 
 	showLoading() {
@@ -565,7 +568,7 @@ class App {
 		document.getElementById("loading").classList.add("hidden");
 	}
 
-	showToast(message, type = "success") {
+	showToast(message, type = "success", duration = 3000) {
 		const container = document.getElementById("toast-container");
 		const toast = document.createElement("div");
 		toast.className = `toast ${type}`;
@@ -575,7 +578,7 @@ class App {
 
 		setTimeout(() => {
 			toast.remove();
-		}, 5000);
+		}, duration);
 	}
 
 	formatViewers(count) {
@@ -604,6 +607,7 @@ class App {
 		div.textContent = text;
 		return div.innerHTML;
 	}
+
 }
 
 // Initialize app when DOM is ready

@@ -279,6 +279,26 @@ body {
 .active-stream-actions {
 	display: flex;
 	gap: 0.5rem;
+	flex-wrap: wrap;
+}
+
+.active-stream-actions .btn {
+	display: flex;
+	align-items: center;
+	gap: 0.25rem;
+}
+
+.stream-modal-actions {
+	display: flex;
+	gap: 0.5rem;
+	margin-top: 1rem;
+	flex-wrap: wrap;
+}
+
+.stream-modal-actions .btn {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
 }
 
 /* Search */
@@ -562,5 +582,14 @@ body {
 
 	.toast {
 		min-width: 0;
+	}
+
+	.stream-modal-actions {
+		flex-direction: column;
+	}
+
+	.stream-modal-actions .btn {
+		width: 100%;
+		justify-content: center;
 	}
 }
