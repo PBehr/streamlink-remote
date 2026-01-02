@@ -166,11 +166,54 @@ body {
 	box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
 }
 
+.stream-thumbnail-container {
+	position: relative;
+}
+
 .stream-thumbnail {
 	width: 100%;
 	aspect-ratio: 16 / 9;
 	object-fit: cover;
 	background: var(--bg-alt);
+}
+
+/* Favorite Button */
+.favorite-btn {
+	position: absolute;
+	top: 0.5rem;
+	right: 0.5rem;
+	width: 36px;
+	height: 36px;
+	border-radius: 50%;
+	background: rgba(0, 0, 0, 0.7);
+	border: none;
+	color: var(--text-muted);
+	font-size: 1.25rem;
+	cursor: pointer;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	transition: all 0.2s;
+	opacity: 0;
+}
+
+.stream-card:hover .favorite-btn {
+	opacity: 1;
+}
+
+.favorite-btn:hover {
+	background: rgba(0, 0, 0, 0.9);
+	color: var(--text);
+	transform: scale(1.1);
+}
+
+.favorite-btn.is-favorite {
+	color: #ffd700;
+	opacity: 1;
+}
+
+.favorite-btn.is-favorite:hover {
+	color: #ffec8b;
 }
 
 .stream-info {

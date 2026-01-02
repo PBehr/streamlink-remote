@@ -4,6 +4,7 @@ class App {
 		this.currentView = "live";
 		this.isAuthenticated = false;
 		this.settings = {};
+		this.favorites = new Set(); // Track favorite channels
 		this.init();
 	}
 
@@ -23,7 +24,49 @@ class App {
 
 		// Load initial data
 		await this.loadAuthStatus();
+		await this.loadFavorites();
 		await this.loadView(this.currentView);
+	}
+
+	// Favorites
+	async loadFavorites() {
+		try {
+			const favorites = await api.getFavorites();
+			this.favorites = new Set(favorites.map(f => f.channel_login.toLowerCase()));
+		} catch (error) {
+			console.error("Error loading favorites:", error);
+		}
+	}
+
+	async toggleFavorite(channel, displayName, event) {
+		event.stopPropagation(); // Don't trigger card click
+		const lowerChannel = channel.toLowerCase();
+
+		try {
+			if (this.favorites.has(lowerChannel)) {
+				await api.removeFavorite(channel);
+				this.favorites.delete(lowerChannel);
+				this.showToast(`Removed ${displayName} from favorites`, "success");
+			} else {
+				await api.addFavorite(channel, displayName);
+				this.favorites.add(lowerChannel);
+				this.showToast(`Added ${displayName} to favorites`, "success");
+			}
+			// Update the star button state
+			this.updateFavoriteButtons();
+		} catch (error) {
+			this.showToast(`Error updating favorite: ${error.message}`, "error");
+		}
+	}
+
+	updateFavoriteButtons() {
+		document.querySelectorAll(".favorite-btn").forEach(btn => {
+			const channel = btn.dataset.channel.toLowerCase();
+			const isFav = this.favorites.has(channel);
+			btn.classList.toggle("is-favorite", isFav);
+			btn.innerHTML = isFav ? "★" : "☆";
+			btn.title = isFav ? "Remove from favorites" : "Add to favorites";
+		});
 	}
 
 	// Navigation
@@ -416,10 +459,19 @@ class App {
 		const thumbnail = stream.thumbnail_url
 			.replace("{width}", "440")
 			.replace("{height}", "248");
+		const isFavorite = this.favorites.has(stream.user_login.toLowerCase());
 
 		return `
 			<div class="stream-card" data-channel="${stream.user_login}" data-username="${stream.user_name}">
-				<img src="${thumbnail}" alt="${stream.title}" class="stream-thumbnail">
+				<div class="stream-thumbnail-container">
+					<img src="${thumbnail}" alt="${stream.title}" class="stream-thumbnail">
+					<button class="favorite-btn ${isFavorite ? 'is-favorite' : ''}"
+					        data-channel="${stream.user_login}"
+					        data-username="${this.escapeHtml(stream.user_name)}"
+					        title="${isFavorite ? 'Remove from favorites' : 'Add to favorites'}">
+						${isFavorite ? '★' : '☆'}
+					</button>
+				</div>
 				<div class="stream-info">
 					<div class="stream-header">
 						<div class="stream-details">
@@ -483,10 +535,21 @@ class App {
 
 	attachStreamCardListeners() {
 		document.querySelectorAll(".stream-card").forEach((card) => {
-			card.addEventListener("click", () => {
+			card.addEventListener("click", (e) => {
+				// Don't start stream if clicking on favorite button
+				if (e.target.classList.contains("favorite-btn")) return;
 				const channel = card.dataset.channel;
 				const username = card.dataset.username;
 				this.startStream(channel, username);
+			});
+		});
+
+		// Attach favorite button listeners
+		document.querySelectorAll(".favorite-btn").forEach((btn) => {
+			btn.addEventListener("click", (e) => {
+				const channel = btn.dataset.channel;
+				const username = btn.dataset.username;
+				this.toggleFavorite(channel, username, e);
 			});
 		});
 	}

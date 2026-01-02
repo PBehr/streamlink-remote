@@ -39,6 +39,12 @@ class DatabaseManager {
 				profile_image_url TEXT,
 				followed_at INTEGER
 			);
+
+			CREATE TABLE IF NOT EXISTS favorites (
+				channel_login TEXT PRIMARY KEY,
+				channel_name TEXT,
+				added_at INTEGER
+			);
 		`);
 
 		console.log("✓ Database initialized");
@@ -161,6 +167,30 @@ class DatabaseManager {
 	getFollowedChannels() {
 		const stmt = this.db.prepare("SELECT * FROM followed_channels ORDER BY display_name ASC");
 		return stmt.all();
+	}
+
+	// Favorites methods
+	addFavorite(channelLogin, channelName) {
+		const stmt = this.db.prepare(`
+			INSERT OR REPLACE INTO favorites (channel_login, channel_name, added_at)
+			VALUES (?, ?, ?)
+		`);
+		stmt.run(channelLogin.toLowerCase(), channelName, Date.now());
+	}
+
+	removeFavorite(channelLogin) {
+		const stmt = this.db.prepare("DELETE FROM favorites WHERE channel_login = ?");
+		stmt.run(channelLogin.toLowerCase());
+	}
+
+	getFavorites() {
+		const stmt = this.db.prepare("SELECT * FROM favorites ORDER BY channel_name ASC");
+		return stmt.all();
+	}
+
+	isFavorite(channelLogin) {
+		const stmt = this.db.prepare("SELECT 1 FROM favorites WHERE channel_login = ?");
+		return !!stmt.get(channelLogin.toLowerCase());
 	}
 
 	close() {
