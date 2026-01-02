@@ -1,9 +1,9 @@
 version: '3.8'
 
 services:
-  streamlink-remote:
+  streamlink-remote-dev:
     build: .
-    container_name: streamlink-remote
+    container_name: streamlink-remote-dev
     ports:
       - "${SERVER_PORT:-3000}:${SERVER_PORT:-3000}"
       - "${STREAM_PORT_START:-8080}-${STREAM_PORT_END:-8089}:${STREAM_PORT_START:-8080}-${STREAM_PORT_END:-8089}"
@@ -28,8 +28,8 @@ services:
       - MANUAL_AUTH_EXPIRES_AT=${MANUAL_AUTH_EXPIRES_AT}
     restart: unless-stopped
     networks:
-      - streamlink-network
+      - streamlink-dev-network
 
 networks:
-  streamlink-network:
+  streamlink-dev-network:
     driver: bridge

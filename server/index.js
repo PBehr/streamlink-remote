@@ -42,8 +42,8 @@ const config = {
 	}
 };
 
-// Use in-memory database for Windows testing (better-sqlite3 has native build issues)
-const Database = require("./database-memory");
+// Use SQLite database for persistent storage
+const Database = require("./database");
 const TwitchAPI = require("./twitch-api");
 const StreamlinkManager = require("./streamlink");
 
@@ -53,6 +53,7 @@ const wss = new WebSocket.Server({ server });
 
 // Initialize components
 const db = new Database(config.database.path);
+db.init(); // Create tables if they don't exist
 const twitchAPI = new TwitchAPI(config.twitch, db);
 const streamlink = new StreamlinkManager(config.streamlink, config.server);
 
@@ -269,6 +270,356 @@ app.get("/api/channel/:name", async (req, res) => {
 	} catch (error) {
 		console.error("Error fetching channel:", error);
 		res.status(500).json({ error: error.message });
+	}
+});
+
+// M3U Playlist endpoint - generates playlist from followed channels
+app.get("/playlist.m3u", async (req, res) => {
+	try {
+		if (!twitchAPI.isAuthenticated()) {
+			return res.status(401).send("Not authenticated");
+		}
+
+		// Get followed channels and live streams
+		const channels = await twitchAPI.getFollowedChannels();
+		const liveStreams = await twitchAPI.getLiveStreams();
+
+		// Create a map of live stream data for quick lookup (includes thumbnails)
+		const liveStreamMap = new Map();
+		for (const stream of liveStreams) {
+			liveStreamMap.set(stream.user_login.toLowerCase(), stream);
+		}
+
+		// Optional: filter for live only
+		const liveOnly = req.query.live === 'true' || req.query.live === '1';
+		let playlistChannels = channels;
+
+		if (liveOnly) {
+			playlistChannels = channels.filter(c =>
+				liveStreamMap.has(c.broadcaster_login.toLowerCase())
+			);
+		}
+
+		// Build M3U playlist
+		const streamHost = process.env.EXTERNAL_HOST ||
+		                   (config.server.host === "0.0.0.0" ? streamlink.getLocalIpAddress() : config.server.host);
+		const streamPort = config.server.port;
+		const quality = req.query.quality || '';
+		const qualityParam = quality ? `?quality=${encodeURIComponent(quality)}` : '';
+
+		let m3u = '#EXTM3U\n';
+
+		for (const channel of playlistChannels) {
+			const channelName = channel.broadcaster_login || channel.user_login;
+			const displayName = channel.broadcaster_name || channel.user_name || channelName;
+
+			// Check if channel is live and get stream thumbnail
+			const liveStream = liveStreamMap.get(channelName.toLowerCase());
+			let logoUrl = '';
+			let streamTitle = '';
+			let gameName = '';
+
+			if (liveStream) {
+				// Use stream thumbnail for live streams
+				if (liveStream.thumbnail_url) {
+					logoUrl = liveStream.thumbnail_url
+						.replace('{width}', '440')
+						.replace('{height}', '248');
+				}
+				// Get the actual stream title set by the streamer
+				streamTitle = liveStream.title || '';
+				gameName = liveStream.game_name || 'Streaming';
+			} else {
+				// Fallback to channel profile image if available
+				logoUrl = channel.thumbnail_url || channel.profile_image_url || '';
+			}
+
+			// Escape quotes in title for M3U format
+			const escapedTitle = streamTitle.replace(/"/g, "'");
+
+			// Build the display title for IPTV players
+			// Format: "StreamerName: Stream Title [Game]" for live, just "StreamerName" for offline
+			let fullTitle;
+			if (liveStream) {
+				fullTitle = streamTitle
+					? `${displayName}: ${streamTitle}`
+					: `${displayName} - ${gameName}`;
+			} else {
+				fullTitle = displayName;
+			}
+
+			// EXTINF format with tvg-name as channel name and full title after comma
+			// Many IPTV players use the text after the comma as the display title
+			m3u += `#EXTINF:-1 tvg-id="${channelName}" tvg-name="${displayName}" tvg-logo="${logoUrl}" group-title="Twitch"`;
+			if (liveStream) {
+				m3u += ` tvg-chno="${liveStream.viewer_count || 0}"`;
+			}
+			m3u += `,${fullTitle}\n`;
+			m3u += `http://${streamHost}:${streamPort}/stream/${channelName}${qualityParam}\n`;
+		}
+
+		// Set headers to prevent caching
+		res.setHeader('Content-Type', 'audio/x-mpegurl');
+		res.setHeader('Content-Disposition', 'attachment; filename="twitch-follows.m3u"');
+		res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+		res.setHeader('Pragma', 'no-cache');
+		res.setHeader('Expires', '0');
+		res.send(m3u);
+
+		console.log(`[Playlist] Generated M3U with ${playlistChannels.length} channels (liveOnly: ${liveOnly}, live: ${liveStreams.length})`);
+	} catch (error) {
+		console.error("Error generating playlist:", error);
+		res.status(500).send(`Error generating playlist: ${error.message}`);
+	}
+});
+
+// Live streams M3U - only currently live followed channels (no redirect, direct generation)
+app.get("/playlist-live.m3u", async (req, res) => {
+	try {
+		if (!twitchAPI.isAuthenticated()) {
+			return res.status(401).send("Not authenticated");
+		}
+
+		// Get live streams directly
+		const liveStreams = await twitchAPI.getLiveStreams();
+
+		// Build M3U playlist
+		const streamHost = process.env.EXTERNAL_HOST ||
+		                   (config.server.host === "0.0.0.0" ? streamlink.getLocalIpAddress() : config.server.host);
+		const streamPort = config.server.port;
+		const quality = req.query.quality || '';
+		const qualityParam = quality ? `?quality=${encodeURIComponent(quality)}` : '';
+
+		let m3u = '#EXTM3U\n';
+
+		for (const stream of liveStreams) {
+			const channelName = stream.user_login;
+			const displayName = stream.user_name || channelName;
+			const streamTitle = stream.title || '';
+			const gameName = stream.game_name || 'Streaming';
+			const viewerCount = stream.viewer_count || 0;
+
+			// Use stream thumbnail
+			let logoUrl = '';
+			if (stream.thumbnail_url) {
+				logoUrl = stream.thumbnail_url
+					.replace('{width}', '440')
+					.replace('{height}', '248');
+			}
+
+			// Sanitize strings for M3U compatibility (remove/replace problematic characters)
+			const sanitize = (str) => str
+				.replace(/"/g, "'")      // Replace double quotes
+				.replace(/\n/g, ' ')     // Remove newlines
+				.replace(/\r/g, '');     // Remove carriage returns
+
+			// Sanitize group title (no special chars, just alphanumeric and spaces)
+			const safeGameName = gameName.replace(/[^a-zA-Z0-9\s\-]/g, '').trim() || 'Twitch';
+
+			// Build the display title: "StreamerName - Stream Title"
+			const fullTitle = streamTitle
+				? sanitize(`${displayName} - ${streamTitle}`)
+				: sanitize(`${displayName} - ${gameName}`);
+
+			// EXTINF format - use Twitch as group for compatibility, game in title
+			m3u += `#EXTINF:-1 tvg-id="${channelName}" tvg-name="${sanitize(displayName)}" tvg-logo="${logoUrl}" group-title="Twitch" tvg-chno="${viewerCount}",${fullTitle}\n`;
+			m3u += `http://${streamHost}:${streamPort}/stream/${channelName}${qualityParam}\n`;
+		}
+
+		// Set headers to prevent caching
+		res.setHeader('Content-Type', 'audio/x-mpegurl');
+		res.setHeader('Content-Disposition', 'attachment; filename="twitch-live.m3u"');
+		res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+		res.setHeader('Pragma', 'no-cache');
+		res.setHeader('Expires', '0');
+		res.send(m3u);
+
+		console.log(`[Playlist] Generated live M3U with ${liveStreams.length} streams`);
+	} catch (error) {
+		console.error("Error generating live playlist:", error);
+		res.status(500).send(`Error generating playlist: ${error.message}`);
+	}
+});
+
+// Favorites M3U - only live streams from favorites
+app.get("/playlist-favorites.m3u", async (req, res) => {
+	try {
+		if (!twitchAPI.isAuthenticated()) {
+			return res.status(401).send("Not authenticated");
+		}
+
+		// Get favorites from database
+		const favorites = db.getFavorites();
+		if (favorites.length === 0) {
+			res.setHeader('Content-Type', 'audio/x-mpegurl');
+			res.setHeader('Content-Disposition', 'attachment; filename="twitch-favorites.m3u"');
+			return res.send('#EXTM3U\n');
+		}
+
+		// Get live streams and filter by favorites
+		const liveStreams = await twitchAPI.getLiveStreams();
+		const favoriteLogins = new Set(favorites.map(f => f.channel_login.toLowerCase()));
+		const liveFavorites = liveStreams.filter(s =>
+			favoriteLogins.has(s.user_login.toLowerCase())
+		);
+
+		// Build M3U playlist
+		const streamHost = process.env.EXTERNAL_HOST ||
+		                   (config.server.host === "0.0.0.0" ? streamlink.getLocalIpAddress() : config.server.host);
+		const streamPort = config.server.port;
+		const quality = req.query.quality || '';
+		const qualityParam = quality ? `?quality=${encodeURIComponent(quality)}` : '';
+
+		let m3u = '#EXTM3U\n';
+
+		for (const stream of liveFavorites) {
+			const channelName = stream.user_login;
+			const displayName = stream.user_name || channelName;
+			const streamTitle = stream.title || '';
+			const gameName = stream.game_name || 'Streaming';
+			const viewerCount = stream.viewer_count || 0;
+
+			let logoUrl = '';
+			if (stream.thumbnail_url) {
+				logoUrl = stream.thumbnail_url
+					.replace('{width}', '440')
+					.replace('{height}', '248');
+			}
+
+			const sanitize = (str) => str
+				.replace(/"/g, "'")
+				.replace(/\n/g, ' ')
+				.replace(/\r/g, '');
+
+			const fullTitle = streamTitle
+				? sanitize(`${displayName} - ${streamTitle}`)
+				: sanitize(`${displayName} - ${gameName}`);
+
+			m3u += `#EXTINF:-1 tvg-id="${channelName}" tvg-name="${sanitize(displayName)}" tvg-logo="${logoUrl}" group-title="Favorites" tvg-chno="${viewerCount}",${fullTitle}\n`;
+			m3u += `http://${streamHost}:${streamPort}/stream/${channelName}${qualityParam}\n`;
+		}
+
+		res.setHeader('Content-Type', 'audio/x-mpegurl');
+		res.setHeader('Content-Disposition', 'attachment; filename="twitch-favorites.m3u"');
+		res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+		res.setHeader('Pragma', 'no-cache');
+		res.setHeader('Expires', '0');
+		res.send(m3u);
+
+		console.log(`[Playlist] Generated favorites M3U with ${liveFavorites.length} live streams (${favorites.length} total favorites)`);
+	} catch (error) {
+		console.error("Error generating favorites playlist:", error);
+		res.status(500).send(`Error generating playlist: ${error.message}`);
+	}
+});
+
+// Favorites API endpoints
+app.get("/api/favorites", (req, res) => {
+	try {
+		const favorites = db.getFavorites();
+		res.json(favorites);
+	} catch (error) {
+		console.error("Error getting favorites:", error);
+		res.status(500).json({ error: error.message });
+	}
+});
+
+app.post("/api/favorites/:channel", (req, res) => {
+	const { channel } = req.params;
+	const { displayName } = req.body;
+
+	try {
+		db.addFavorite(channel, displayName || channel);
+		res.json({ success: true, channel, isFavorite: true });
+		console.log(`[Favorites] Added: ${channel}`);
+	} catch (error) {
+		console.error("Error adding favorite:", error);
+		res.status(500).json({ error: error.message });
+	}
+});
+
+app.delete("/api/favorites/:channel", (req, res) => {
+	const { channel } = req.params;
+
+	try {
+		db.removeFavorite(channel);
+		res.json({ success: true, channel, isFavorite: false });
+		console.log(`[Favorites] Removed: ${channel}`);
+	} catch (error) {
+		console.error("Error removing favorite:", error);
+		res.status(500).json({ error: error.message });
+	}
+});
+
+app.get("/api/favorites/:channel", (req, res) => {
+	const { channel } = req.params;
+
+	try {
+		const isFavorite = db.isFavorite(channel);
+		res.json({ channel, isFavorite });
+	} catch (error) {
+		console.error("Error checking favorite:", error);
+		res.status(500).json({ error: error.message });
+	}
+});
+
+// On-demand stream endpoint for M3U playlist / direct player access
+// This endpoint starts a stream if not running and redirects to the stream URL
+app.get("/stream/:channel", async (req, res) => {
+	const { channel } = req.params;
+	const quality = req.query.quality || null;
+
+	console.log(`[On-Demand] Request for channel: ${channel}`);
+
+	try {
+		// Check if stream is already running
+		if (streamlink.isStreamActive(channel)) {
+			const streams = streamlink.getActiveStreams();
+			const stream = streams.find(s => s.channel.toLowerCase() === channel.toLowerCase());
+			if (stream) {
+				console.log(`[On-Demand] Stream already active, redirecting to ${stream.url}`);
+				// Track this client connection
+				streamlink.trackClientConnect(channel);
+				return res.redirect(302, stream.url);
+			}
+		}
+
+		// Check if we have room for another stream (max ports)
+		const activeStreams = streamlink.getActiveStreams();
+		const maxStreams = config.server.streamPortEnd - config.server.streamPortStart + 1;
+
+		if (activeStreams.length >= maxStreams) {
+			// Find oldest stream without active clients and stop it
+			const oldestWithoutClients = streamlink.getOldestStreamWithoutClients();
+			if (oldestWithoutClients) {
+				console.log(`[On-Demand] Max streams reached, stopping oldest without clients: ${oldestWithoutClients}`);
+				streamlink.stopStream(oldestWithoutClients);
+			} else {
+				// All streams have active clients, stop the oldest one anyway
+				const oldest = activeStreams.sort((a, b) => a.startedAt - b.startedAt)[0];
+				console.log(`[On-Demand] Max streams reached, stopping oldest stream: ${oldest.channel}`);
+				streamlink.stopStream(oldest.channel);
+			}
+			// Wait a moment for cleanup
+			await new Promise(resolve => setTimeout(resolve, 500));
+		}
+
+		// Start the stream
+		console.log(`[On-Demand] Starting stream for ${channel}...`);
+		const result = await streamlink.startStream(channel, quality);
+
+		if (result.success) {
+			console.log(`[On-Demand] Stream started, redirecting to ${result.url}`);
+			// Track this client connection
+			streamlink.trackClientConnect(channel);
+			return res.redirect(302, result.url);
+		} else {
+			console.error(`[On-Demand] Failed to start stream: ${result.error}`);
+			return res.status(503).send(`Stream unavailable: ${result.error || 'Unknown error'}`);
+		}
+	} catch (error) {
+		console.error(`[On-Demand] Error: ${error.message}`);
+		return res.status(503).send(`Stream unavailable: ${error.message}`);
 	}
 });
 

@@ -102,6 +102,28 @@ class API {
 			body: settings
 		});
 	}
+
+	// Favorites
+	async getFavorites() {
+		return this.request("/api/favorites");
+	}
+
+	async addFavorite(channel, displayName) {
+		return this.request(`/api/favorites/${encodeURIComponent(channel)}`, {
+			method: "POST",
+			body: { displayName }
+		});
+	}
+
+	async removeFavorite(channel) {
+		return this.request(`/api/favorites/${encodeURIComponent(channel)}`, {
+			method: "DELETE"
+		});
+	}
+
+	async isFavorite(channel) {
+		return this.request(`/api/favorites/${encodeURIComponent(channel)}`);
+	}
 }
 
 // Export API instance

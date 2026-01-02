@@ -6,7 +6,9 @@ RUN apk add --no-cache \
     python3 \
     py3-pip \
     ffmpeg \
-    git
+    git \
+    build-base \
+    python3-dev
 
 # Install streamlink
 RUN pip3 install --break-system-packages --no-cache-dir streamlink

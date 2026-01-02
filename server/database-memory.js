@@ -8,6 +8,7 @@ class DatabaseManager {
 			playerInput: "http"
 		};
 		this.followedChannels = [];
+		this.favorites = new Map(); // channel_login -> { channel_login, channel_name, added_at }
 	}
 
 	init() {
@@ -51,6 +52,30 @@ class DatabaseManager {
 
 	getFollowedChannels() {
 		return [...this.followedChannels];
+	}
+
+	// Favorites methods
+	addFavorite(channelLogin, channelName) {
+		const key = channelLogin.toLowerCase();
+		this.favorites.set(key, {
+			channel_login: key,
+			channel_name: channelName,
+			added_at: Date.now()
+		});
+	}
+
+	removeFavorite(channelLogin) {
+		this.favorites.delete(channelLogin.toLowerCase());
+	}
+
+	getFavorites() {
+		return Array.from(this.favorites.values()).sort((a, b) =>
+			a.channel_name.localeCompare(b.channel_name)
+		);
+	}
+
+	isFavorite(channelLogin) {
+		return this.favorites.has(channelLogin.toLowerCase());
 	}
 
 	close() {

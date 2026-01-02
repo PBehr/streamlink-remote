@@ -9,6 +9,86 @@ class StreamlinkManager extends EventEmitter {
 		this.serverConfig = serverConfig;
 		this.activeStreams = new Map();
 		this.nextPort = serverConfig.streamPortStart;
+		// Client tracking for auto-stop
+		this.clientConnections = new Map(); // channel -> { count: number, lastActivity: timestamp }
+		this.autoStopTimeout = 120000; // 2 minutes without clients before auto-stop
+		this.autoStopCheckInterval = 30000; // Check every 30 seconds
+		this._startAutoStopChecker();
+	}
+
+	// Start periodic checker for streams without clients
+	_startAutoStopChecker() {
+		setInterval(() => {
+			this._checkAutoStop();
+		}, this.autoStopCheckInterval);
+	}
+
+	// Check and stop streams without recent client activity
+	_checkAutoStop() {
+		const now = Date.now();
+		for (const [channel, streamData] of this.activeStreams) {
+			const clientInfo = this.clientConnections.get(channel);
+
+			// Skip if stream was started less than autoStopTimeout ago
+			if (now - streamData.startedAt < this.autoStopTimeout) {
+				continue;
+			}
+
+			// If no client info exists or no recent activity, consider stopping
+			if (!clientInfo || (now - clientInfo.lastActivity > this.autoStopTimeout)) {
+				console.log(`[AutoStop] No client activity for ${channel} in ${this.autoStopTimeout/1000}s, stopping stream`);
+				this.stopStream(channel);
+				this.clientConnections.delete(channel);
+			}
+		}
+	}
+
+	// Track client connection to a stream
+	trackClientConnect(channel) {
+		const lowerChannel = channel.toLowerCase();
+		const existing = this.clientConnections.get(lowerChannel);
+		if (existing) {
+			existing.count++;
+			existing.lastActivity = Date.now();
+		} else {
+			this.clientConnections.set(lowerChannel, {
+				count: 1,
+				lastActivity: Date.now()
+			});
+		}
+		console.log(`[Client] Connected to ${channel}, active clients: ${this.clientConnections.get(lowerChannel).count}`);
+	}
+
+	// Track client disconnect from a stream
+	trackClientDisconnect(channel) {
+		const lowerChannel = channel.toLowerCase();
+		const existing = this.clientConnections.get(lowerChannel);
+		if (existing && existing.count > 0) {
+			existing.count--;
+			existing.lastActivity = Date.now();
+			console.log(`[Client] Disconnected from ${channel}, active clients: ${existing.count}`);
+		}
+	}
+
+	// Get oldest stream without active clients (for replacement when max streams reached)
+	getOldestStreamWithoutClients() {
+		const now = Date.now();
+		let oldestChannel = null;
+		let oldestTime = Infinity;
+
+		for (const [channel, streamData] of this.activeStreams) {
+			const clientInfo = this.clientConnections.get(channel.toLowerCase());
+
+			// Consider "without clients" if no recent activity (last 60 seconds)
+			const hasRecentActivity = clientInfo && (now - clientInfo.lastActivity < 60000);
+
+			if (!hasRecentActivity && streamData.startedAt < oldestTime) {
+				oldestTime = streamData.startedAt;
+				oldestChannel = channel;
+			}
+		}
+
+		return oldestChannel;
 	}
 
 	getLocalIpAddress() {
