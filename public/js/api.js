@@ -124,6 +124,28 @@ class API {
 	async isFavorite(channel) {
 		return this.request(`/api/favorites/${encodeURIComponent(channel)}`);
 	}
+
+	// YouTube
+	async getYoutubeChannels() {
+		return this.request("/api/youtube/channels");
+	}
+
+	async addYoutubeChannel(url) {
+		return this.request("/api/youtube/channels", {
+			method: "POST",
+			body: { url }
+		});
+	}
+
+	async removeYoutubeChannel(channelId) {
+		return this.request(`/api/youtube/channels/${encodeURIComponent(channelId)}`, {
+			method: "DELETE"
+		});
+	}
+
+	async getYoutubeVideos(limit = 25) {
+		return this.request(`/api/youtube/videos?limit=${limit}`);
+	}
 }
 
 // Export API instance

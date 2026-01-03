@@ -17,6 +17,7 @@ class App {
 		this.setupSearch();
 		this.setupSettings();
 		this.setupRefresh();
+		this.setupYouTube();
 
 		// Connect WebSocket
 		wsClient.connect();
@@ -114,6 +115,9 @@ class App {
 					break;
 				case "search":
 					// Search is manual
+					break;
+				case "youtube":
+					await this.loadYouTube();
 					break;
 				case "settings":
 					await this.loadSettings();
@@ -336,6 +340,180 @@ class App {
 		}
 	}
 
+	// YouTube
+	setupYouTube() {
+		const addBtn = document.getElementById("youtube-add-btn");
+		const input = document.getElementById("youtube-channel-input");
+
+		const addChannel = async () => {
+			const url = input.value.trim();
+			if (!url) return;
+
+			this.showLoading();
+			try {
+				const result = await api.addYoutubeChannel(url);
+				this.showToast(`Added channel: ${result.channel.channel_name}`, "success");
+				input.value = "";
+				await this.loadYouTube();
+			} catch (error) {
+				this.showToast(`Error adding channel: ${error.message}`, "error");
+			} finally {
+				this.hideLoading();
+			}
+		};
+
+		addBtn.addEventListener("click", addChannel);
+		input.addEventListener("keypress", (e) => {
+			if (e.key === "Enter") {
+				addChannel();
+			}
+		});
+	}
+
+	async loadYouTube() {
+		const channelsList = document.getElementById("youtube-channels-list");
+		const videosContainer = document.getElementById("youtube-videos");
+		const emptyState = document.getElementById("youtube-empty");
+
+		try {
+			// Load channels
+			const channels = await api.getYoutubeChannels();
+
+			if (channels.length === 0) {
+				channelsList.innerHTML = "";
+				videosContainer.innerHTML = "";
+				emptyState.classList.remove("hidden");
+				return;
+			}
+
+			emptyState.classList.add("hidden");
+
+			// Render channel tags
+			channelsList.innerHTML = channels.map(channel => `
+				<div class="youtube-channel-tag" data-channel-id="${channel.channel_id}">
+					<span class="channel-name">${this.escapeHtml(channel.channel_name)}</span>
+					<button class="remove-channel-btn" title="Remove channel">&times;</button>
+				</div>
+			`).join("");
+
+			// Attach remove listeners
+			channelsList.querySelectorAll(".remove-channel-btn").forEach(btn => {
+				btn.addEventListener("click", async (e) => {
+					const tag = e.target.closest(".youtube-channel-tag");
+					const channelId = tag.dataset.channelId;
+					try {
+						await api.removeYoutubeChannel(channelId);
+						this.showToast("Channel removed", "success");
+						await this.loadYouTube();
+					} catch (error) {
+						this.showToast(`Error removing channel: ${error.message}`, "error");
+					}
+				});
+			});
+
+			// Load videos
+			const data = await api.getYoutubeVideos(25);
+			const videos = data.videos || [];
+
+			if (videos.length === 0) {
+				videosContainer.innerHTML = "<p class='text-muted'>No videos found</p>";
+			} else {
+				videosContainer.innerHTML = videos.map(video => this.renderYouTubeVideoCard(video)).join("");
+				this.attachYouTubeVideoListeners();
+			}
+		} catch (error) {
+			this.showToast(`Error loading YouTube: ${error.message}`, "error");
+		}
+	}
+
+	renderYouTubeVideoCard(video) {
+		const dateStr = new Date(video.published).toLocaleDateString("de-DE", {
+			day: "2-digit",
+			month: "2-digit",
+			year: "numeric"
+		});
+
+		return `
+			<div class="stream-card youtube-card" data-video-id="${video.videoId}" data-title="${this.escapeHtml(video.title)}">
+				<div class="stream-thumbnail-container">
+					<img src="${video.thumbnail}" alt="${this.escapeHtml(video.title)}" class="stream-thumbnail">
+					<span class="youtube-badge">YouTube</span>
+				</div>
+				<div class="stream-info">
+					<div class="stream-header">
+						<div class="stream-details">
+							<div class="stream-title">${this.escapeHtml(video.title)}</div>
+							<div class="stream-channel">${this.escapeHtml(video.channelName)}</div>
+						</div>
+					</div>
+					<div class="stream-meta">
+						<span>${dateStr}</span>
+					</div>
+				</div>
+			</div>
+		`;
+	}
+
+	attachYouTubeVideoListeners() {
+		document.querySelectorAll(".youtube-card").forEach(card => {
+			card.addEventListener("click", () => {
+				const videoId = card.dataset.videoId;
+				const title = card.dataset.title;
+				this.playYouTubeVideo(videoId, title);
+			});
+		});
+	}
+
+	async playYouTubeVideo(videoId, title) {
+		this.showLoading();
+
+		try {
+			// Get the stream URL by making a request to our endpoint
+			const streamHost = window.location.hostname;
+			const streamPort = window.location.port || "80";
+			const streamUrl = `http://${streamHost}:${streamPort}/youtube/${videoId}`;
+
+			// Show modal with stream URL
+			this.showYouTubeModal(videoId, title, streamUrl);
+		} catch (error) {
+			this.showToast(`Error playing video: ${error.message}`, "error");
+		} finally {
+			this.hideLoading();
+		}
+	}
+
+	showYouTubeModal(videoId, title, streamUrl) {
+		const modal = document.getElementById("stream-modal");
+		const modalBody = document.getElementById("modal-body");
+
+		modalBody.innerHTML = `
+			<h2>🎬 ${this.escapeHtml(title)}</h2>
+			<p>Stream URL ready!</p>
+			<div class="active-stream-url">
+				<code>${streamUrl}</code>
+				<button class="btn btn-small" onclick="app.copyToClipboard('${streamUrl}')">Copy</button>
+			</div>
+			<div style="margin-top: 1rem;">
+				<button class="btn btn-primary" onclick="app.openInPlayer('${streamUrl}')">Open in VLC</button>
+				<button class="btn" onclick="window.open('https://www.youtube.com/watch?v=${videoId}', '_blank')">Open on YouTube</button>
+				<button class="btn" onclick="app.closeModal()">Close</button>
+			</div>
+			<p style="margin-top: 1rem; color: var(--text-muted); font-size: 0.875rem;">
+				💡 The stream will start when you open it in a player
+			</p>
+		`;
+
+		modal.classList.remove("hidden");
+
+		modal.querySelector(".modal-overlay").addEventListener("click", () => {
+			this.closeModal();
+		});
+
+		modal.querySelector(".modal-close").addEventListener("click", () => {
+			this.closeModal();
+		});
+	}
+
 	// Settings
 	setupSettings() {
 		const saveBtn = document.getElementById("save-settings-btn");
@@ -365,9 +543,37 @@ class App {
 					<button class="btn btn-primary btn-small" onclick="app.login()">Login with Twitch</button>
 				`;
 			}
+
+			// Update playlist links
+			this.renderPlaylistLinks();
 		} catch (error) {
 			this.showToast(`Error loading settings: ${error.message}`, "error");
 		}
+	}
+
+	renderPlaylistLinks() {
+		const container = document.getElementById("playlist-links");
+		const baseUrl = `${window.location.protocol}//${window.location.host}`;
+
+		const playlists = [
+			{ name: "Twitch - All Follows", url: `${baseUrl}/playlist.m3u`, desc: "All followed channels" },
+			{ name: "Twitch - Live Only", url: `${baseUrl}/playlist-live.m3u`, desc: "Only currently live" },
+			{ name: "Twitch - Favorites", url: `${baseUrl}/playlist-favorites.m3u`, desc: "Live favorites only" },
+			{ name: "YouTube", url: `${baseUrl}/playlist-youtube.m3u`, desc: "Recent videos from subscribed channels" }
+		];
+
+		container.innerHTML = playlists.map(p => `
+			<div class="playlist-link-item">
+				<div class="playlist-link-info">
+					<strong>${p.name}</strong>
+					<span class="text-muted">${p.desc}</span>
+				</div>
+				<div class="playlist-link-actions">
+					<code class="playlist-url">${p.url}</code>
+					<button class="btn btn-small" onclick="app.copyToClipboard('${p.url}')">Copy</button>
+				</div>
+			</div>
+		`).join("");
 	}
 
 	async saveSettings() {

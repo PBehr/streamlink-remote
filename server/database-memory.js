@@ -9,6 +9,7 @@ class DatabaseManager {
 		};
 		this.followedChannels = [];
 		this.favorites = new Map(); // channel_login -> { channel_login, channel_name, added_at }
+		this.youtubeChannels = new Map(); // channel_id -> { channel_id, channel_name, channel_url, added_at }
 	}
 
 	init() {
@@ -76,6 +77,30 @@ class DatabaseManager {
 
 	isFavorite(channelLogin) {
 		return this.favorites.has(channelLogin.toLowerCase());
+	}
+
+	// YouTube channels methods
+	addYoutubeChannel(channelId, channelName, channelUrl) {
+		this.youtubeChannels.set(channelId, {
+			channel_id: channelId,
+			channel_name: channelName,
+			channel_url: channelUrl,
+			added_at: Date.now()
+		});
+	}
+
+	removeYoutubeChannel(channelId) {
+		this.youtubeChannels.delete(channelId);
+	}
+
+	getYoutubeChannels() {
+		return Array.from(this.youtubeChannels.values()).sort((a, b) =>
+			a.channel_name.localeCompare(b.channel_name)
+		);
+	}
+
+	getYoutubeChannel(channelId) {
+		return this.youtubeChannels.get(channelId);
 	}
 
 	close() {

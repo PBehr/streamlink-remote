@@ -46,6 +46,7 @@ const config = {
 const Database = require("./database");
 const TwitchAPI = require("./twitch-api");
 const StreamlinkManager = require("./streamlink");
+const YouTubeService = require("./youtube");
 
 const app = express();
 const server = http.createServer(app);
@@ -56,6 +57,7 @@ const db = new Database(config.database.path);
 db.init(); // Create tables if they don't exist
 const twitchAPI = new TwitchAPI(config.twitch, db);
 const streamlink = new StreamlinkManager(config.streamlink, config.server);
+const youtubeService = new YouTubeService();
 
 // Middleware
 app.use(cors());
@@ -674,6 +676,199 @@ app.put("/api/settings", (req, res) => {
 	} catch (error) {
 		console.error("Error updating settings:", error);
 		res.status(500).json({ error: error.message });
+	}
+});
+
+// YouTube Channels API endpoints
+app.get("/api/youtube/channels", (req, res) => {
+	try {
+		const channels = db.getYoutubeChannels();
+		res.json(channels);
+	} catch (error) {
+		console.error("Error getting YouTube channels:", error);
+		res.status(500).json({ error: error.message });
+	}
+});
+
+app.post("/api/youtube/channels", async (req, res) => {
+	const { url } = req.body;
+
+	if (!url) {
+		return res.status(400).json({ error: "URL is required" });
+	}
+
+	try {
+		// Resolve channel ID and name from URL
+		const { channelId, channelName } = await youtubeService.resolveChannelId(url);
+
+		// Get channel name if not already resolved
+		let finalChannelName = channelName;
+		if (!finalChannelName) {
+			// Fetch videos to get channel name from RSS
+			const videos = await youtubeService.fetchChannelVideos(channelId);
+			if (videos.length > 0) {
+				finalChannelName = videos[0].channelName;
+			} else {
+				finalChannelName = channelId;
+			}
+		}
+
+		// Store in database
+		const channelUrl = `https://www.youtube.com/channel/${channelId}`;
+		db.addYoutubeChannel(channelId, finalChannelName, channelUrl);
+
+		res.json({
+			success: true,
+			channel: {
+				channel_id: channelId,
+				channel_name: finalChannelName,
+				channel_url: channelUrl
+			}
+		});
+		console.log(`[YouTube] Added channel: ${finalChannelName} (${channelId})`);
+	} catch (error) {
+		console.error("Error adding YouTube channel:", error);
+		res.status(400).json({ error: error.message });
+	}
+});
+
+app.delete("/api/youtube/channels/:channelId", (req, res) => {
+	const { channelId } = req.params;
+
+	try {
+		db.removeYoutubeChannel(channelId);
+		res.json({ success: true, channelId });
+		console.log(`[YouTube] Removed channel: ${channelId}`);
+	} catch (error) {
+		console.error("Error removing YouTube channel:", error);
+		res.status(500).json({ error: error.message });
+	}
+});
+
+// YouTube videos feed endpoint
+app.get("/api/youtube/videos", async (req, res) => {
+	const limit = parseInt(req.query.limit) || 25;
+
+	try {
+		const channels = db.getYoutubeChannels();
+		if (channels.length === 0) {
+			return res.json({ videos: [] });
+		}
+
+		const videos = await youtubeService.fetchAllChannelVideos(channels, limit);
+		res.json({ videos });
+	} catch (error) {
+		console.error("Error fetching YouTube videos:", error);
+		res.status(500).json({ error: error.message });
+	}
+});
+
+// YouTube M3U Playlist endpoint
+app.get("/playlist-youtube.m3u", async (req, res) => {
+	try {
+		const channels = db.getYoutubeChannels();
+		if (channels.length === 0) {
+			res.setHeader('Content-Type', 'audio/x-mpegurl');
+			res.setHeader('Content-Disposition', 'attachment; filename="youtube.m3u"');
+			return res.send('#EXTM3U\n');
+		}
+
+		const limit = parseInt(req.query.limit) || 25;
+		const videos = await youtubeService.fetchAllChannelVideos(channels, limit);
+
+		// Build M3U playlist
+		const streamHost = process.env.EXTERNAL_HOST ||
+		                   (config.server.host === "0.0.0.0" ? streamlink.getLocalIpAddress() : config.server.host);
+		const streamPort = config.server.port;
+
+		let m3u = '#EXTM3U\n';
+
+		for (const video of videos) {
+			const sanitize = (str) => str
+				.replace(/"/g, "'")
+				.replace(/\n/g, ' ')
+				.replace(/\r/g, '');
+
+			// Format date for display
+			const dateStr = video.published.toLocaleDateString('de-DE', {
+				day: '2-digit',
+				month: '2-digit'
+			});
+
+			const fullTitle = sanitize(`${video.channelName} - ${video.title}`);
+
+			m3u += `#EXTINF:-1 tvg-id="${video.videoId}" tvg-name="${sanitize(video.channelName)}" tvg-logo="${video.thumbnail}" group-title="YouTube",${fullTitle} (${dateStr})\n`;
+			m3u += `http://${streamHost}:${streamPort}/youtube/${video.videoId}\n`;
+		}
+
+		res.setHeader('Content-Type', 'audio/x-mpegurl');
+		res.setHeader('Content-Disposition', 'attachment; filename="youtube.m3u"');
+		res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+		res.setHeader('Pragma', 'no-cache');
+		res.setHeader('Expires', '0');
+		res.send(m3u);
+
+		console.log(`[Playlist] Generated YouTube M3U with ${videos.length} videos from ${channels.length} channels`);
+	} catch (error) {
+		console.error("Error generating YouTube playlist:", error);
+		res.status(500).send(`Error generating playlist: ${error.message}`);
+	}
+});
+
+// YouTube on-demand stream endpoint
+app.get("/youtube/:videoId", async (req, res) => {
+	const { videoId } = req.params;
+	const quality = req.query.quality || null;
+
+	console.log(`[YouTube] Request for video: ${videoId}`);
+
+	try {
+		const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+
+		// Check if stream is already running
+		const streamKey = `yt:${videoId}`;
+		if (streamlink.isStreamActive(streamKey)) {
+			const streams = streamlink.getActiveStreams();
+			const stream = streams.find(s => s.channel === streamKey);
+			if (stream) {
+				console.log(`[YouTube] Stream already active, redirecting to ${stream.url}`);
+				streamlink.trackClientConnect(streamKey);
+				return res.redirect(302, stream.url);
+			}
+		}
+
+		// Check if we have room for another stream
+		const activeStreams = streamlink.getActiveStreams();
+		const maxStreams = config.server.streamPortEnd - config.server.streamPortStart + 1;
+
+		if (activeStreams.length >= maxStreams) {
+			const oldestWithoutClients = streamlink.getOldestStreamWithoutClients();
+			if (oldestWithoutClients) {
+				console.log(`[YouTube] Max streams reached, stopping oldest without clients: ${oldestWithoutClients}`);
+				streamlink.stopStream(oldestWithoutClients);
+			} else {
+				const oldest = activeStreams.sort((a, b) => a.startedAt - b.startedAt)[0];
+				console.log(`[YouTube] Max streams reached, stopping oldest stream: ${oldest.channel}`);
+				streamlink.stopStream(oldest.channel);
+			}
+			await new Promise(resolve => setTimeout(resolve, 500));
+		}
+
+		// Start the stream using the video URL
+		console.log(`[YouTube] Starting stream for ${videoId}...`);
+		const result = await streamlink.startStream(streamKey, quality, videoUrl);
+
+		if (result.success) {
+			console.log(`[YouTube] Stream started, redirecting to ${result.url}`);
+			streamlink.trackClientConnect(streamKey);
+			return res.redirect(302, result.url);
+		} else {
+			console.error(`[YouTube] Failed to start stream: ${result.error}`);
+			return res.status(503).send(`Stream unavailable: ${result.error || 'Unknown error'}`);
+		}
+	} catch (error) {
+		console.error(`[YouTube] Error: ${error.message}`);
+		return res.status(503).send(`Stream unavailable: ${error.message}`);
 	}
 });
 

@@ -40,6 +40,10 @@
 				<span class="icon">🔍</span>
 				Search
 			</button>
+			<button class="nav-item" data-view="youtube">
+				<span class="icon">📺</span>
+				YouTube
+			</button>
 			<button class="nav-item" data-view="settings">
 				<span class="icon">⚙️</span>
 				Settings
@@ -100,6 +104,32 @@
 				</div>
 			</div>
 
+			<!-- YouTube View -->
+			<div id="view-youtube" class="view">
+				<div class="view-header">
+					<h2>YouTube Videos</h2>
+				</div>
+
+				<!-- Channel Management Section -->
+				<div class="youtube-channels-section">
+					<div class="youtube-add-channel">
+						<input type="text" id="youtube-channel-input" placeholder="YouTube channel URL or @handle..." class="search-input">
+						<button id="youtube-add-btn" class="btn btn-primary">Add Channel</button>
+					</div>
+					<div id="youtube-channels-list" class="youtube-channels-list"></div>
+				</div>
+
+				<!-- Videos Feed -->
+				<div class="youtube-videos-section">
+					<h3>Recent Videos</h3>
+					<div id="youtube-videos" class="stream-grid"></div>
+					<div id="youtube-empty" class="empty-state hidden">
+						<p>No YouTube channels added yet</p>
+						<p class="text-muted">Add a channel above to see recent videos</p>
+					</div>
+				</div>
+			</div>
+
 			<!-- Settings View -->
 			<div id="view-settings" class="view">
 				<div class="view-header">
@@ -135,6 +165,12 @@
 
 					<div class="setting-group">
 						<button id="save-settings-btn" class="btn btn-primary">Save Settings</button>
+					</div>
+
+					<div class="setting-group">
+						<h3>M3U Playlists</h3>
+						<p class="text-muted" style="margin-bottom: 0.5rem;">Use these URLs in VLC or IPTV apps</p>
+						<div id="playlist-links" class="playlist-links"></div>
 					</div>
 				</div>
 			</div>
