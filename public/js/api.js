@@ -164,6 +164,32 @@ class API {
 	async getYoutubeVideos(limit = 25) {
 		return this.request(`/api/youtube/videos?limit=${limit}`);
 	}
+
+	async getYoutubeDirectUrl(videoId, quality = null) {
+		let url = `/api/youtube/direct/${encodeURIComponent(videoId)}`;
+		if (quality) {
+			url += `?quality=${encodeURIComponent(quality)}`;
+		}
+		return this.request(url);
+	}
+
+	// Twitch VOD direct URL
+	async getVodDirectUrl(videoId, quality = null) {
+		let url = `/api/vod/direct/${encodeURIComponent(videoId)}`;
+		if (quality) {
+			url += `?quality=${encodeURIComponent(quality)}`;
+		}
+		return this.request(url);
+	}
+
+	// Twitch Clip direct URL
+	async getClipDirectUrl(clipId, quality = null) {
+		let url = `/api/clip/direct/${encodeURIComponent(clipId)}`;
+		if (quality) {
+			url += `?quality=${encodeURIComponent(quality)}`;
+		}
+		return this.request(url);
+	}
 }
 
 // Export API instance

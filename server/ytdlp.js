@@ -347,6 +347,128 @@ class YtDlpManager extends EventEmitter {
 	isStreamActive(videoId) {
 		return this.activeStreams.has(videoId);
 	}
+
+	/**
+	 * Get direct YouTube URL without starting a server
+	 * This allows seeking in the player but URLs expire after a few hours
+	 *
+	 * Format selection priority:
+	 * 1. Combined video+audio mp4 (format 18, 22, etc.) - most compatible
+	 * 2. Best available format as fallback
+	 *
+	 * Note: Separate video+audio streams (bestvideo+bestaudio) return 2 URLs
+	 * which don't work for simple redirect-based playback
+	 */
+	async getDirectUrl(videoId, quality = null) {
+		const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+
+		// Prefer combined formats (video+audio in single file) for maximum compatibility
+		// Format 22 = 720p mp4, Format 18 = 360p mp4 - both are combined formats
+		// These work reliably with direct URL redirects in IPTV players
+		let formatSelector;
+		if (quality === "best" || quality === null) {
+			// Prefer highest quality combined format, fallback to any format
+			formatSelector = "22/18/best[vcodec!=none][acodec!=none]/best";
+		} else {
+			// Try to match requested quality with combined format
+			const height = quality.replace('p', '');
+			formatSelector = `best[height<=${height}][vcodec!=none][acodec!=none]/22/18/best`;
+		}
+
+		const args = [
+			"-f", formatSelector,
+			"--no-warnings",
+			"-g", // Get URL only
+			videoUrl
+		];
+
+		return this._execYtDlp(args, videoId, "YouTube");
+	}
+
+	/**
+	 * Get direct Twitch VOD URL without starting a server
+	 * This allows seeking in the player
+	 */
+	async getTwitchVodDirectUrl(videoId, quality = null) {
+		const vodUrl = `https://www.twitch.tv/videos/${videoId}`;
+		const ytdlpQuality = quality || "best";
+
+		const args = [
+			"-f", ytdlpQuality,
+			"--no-warnings",
+			"-g", // Get URL only
+			vodUrl
+		];
+
+		return this._execYtDlp(args, videoId, "Twitch VOD");
+	}
+
+	/**
+	 * Get direct Twitch Clip URL without starting a server
+	 */
+	async getTwitchClipDirectUrl(clipId, quality = null) {
+		const clipUrl = `https://clips.twitch.tv/${clipId}`;
+		const ytdlpQuality = quality || "best";
+
+		const args = [
+			"-f", ytdlpQuality,
+			"--no-warnings",
+			"-g", // Get URL only
+			clipUrl
+		];
+
+		return this._execYtDlp(args, clipId, "Twitch Clip");
+	}
+
+	/**
+	 * Internal helper to execute yt-dlp and get direct URL
+	 */
+	_execYtDlp(args, id, type) {
+		console.log(`[YtDlp] Getting direct ${type} URL for: ${id}`);
+
+		return new Promise((resolve, reject) => {
+			const ytdlpProcess = spawn("yt-dlp", args);
+
+			let outputBuffer = "";
+			let errorBuffer = "";
+
+			ytdlpProcess.stdout.on("data", (data) => {
+				outputBuffer += data.toString();
+			});
+
+			ytdlpProcess.stderr.on("data", (data) => {
+				errorBuffer += data.toString();
+			});
+
+			ytdlpProcess.on("close", (code) => {
+				if (code === 0 && outputBuffer.trim()) {
+					const urls = outputBuffer.trim().split("\n");
+					const directUrl = urls[0]; // Video URL (first line)
+					console.log(`[YtDlp] Got direct URL for ${id}`);
+					resolve({
+						success: true,
+						id,
+						directUrl,
+						expiresIn: "~6 hours"
+					});
+				} else {
+					console.error(`[YtDlp] Failed to get URL for ${id}: ${errorBuffer}`);
+					reject(new Error(`yt-dlp failed: ${errorBuffer || 'Unknown error'}`));
+				}
+			});
+
+			ytdlpProcess.on("error", (error) => {
+				console.error(`[YtDlp] Process error:`, error);
+				reject(error);
+			});
+
+			// Timeout after 30 seconds
+			setTimeout(() => {
+				ytdlpProcess.kill();
+				reject(new Error("yt-dlp timeout after 30s"));
+			}, 30000);
+		});
+	}
 }
 
 module.exports = YtDlpManager;

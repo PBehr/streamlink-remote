@@ -721,55 +721,23 @@ app.get("/api/clips", async (req, res) => {
 	}
 });
 
-// Twitch VOD on-demand stream endpoint
+// Twitch VOD on-demand stream endpoint - redirects directly to Twitch CDN (seekable!)
 app.get("/vod/:videoId", async (req, res) => {
-	const { videoId } = req.params;
+	// Strip .mp4 extension if present (for UHF IPTV player compatibility)
+	const videoId = req.params.videoId.replace(/\.mp4$/i, '');
 	const quality = req.query.quality || null;
 
 	console.log(`[VOD] Request for video: ${videoId}`);
 
 	try {
-		const vodUrl = `https://www.twitch.tv/videos/${videoId}`;
+		// Get direct URL from yt-dlp and redirect to it
+		const result = await ytdlp.getTwitchVodDirectUrl(videoId, quality);
 
-		// Check if stream is already running
-		const streamKey = `vod:${videoId}`;
-		if (streamlink.isStreamActive(streamKey)) {
-			const streams = streamlink.getActiveStreams();
-			const stream = streams.find(s => s.channel === streamKey);
-			if (stream) {
-				console.log(`[VOD] Stream already active, redirecting to ${stream.url}`);
-				streamlink.trackClientConnect(streamKey);
-				return res.redirect(302, stream.url);
-			}
-		}
-
-		// Check if we have room for another stream
-		const activeStreams = streamlink.getActiveStreams();
-		const maxStreams = config.server.streamPortEnd - config.server.streamPortStart + 1;
-
-		if (activeStreams.length >= maxStreams) {
-			const oldestWithoutClients = streamlink.getOldestStreamWithoutClients();
-			if (oldestWithoutClients) {
-				console.log(`[VOD] Max streams reached, stopping oldest without clients: ${oldestWithoutClients}`);
-				streamlink.stopStream(oldestWithoutClients);
-			} else {
-				const oldest = activeStreams.sort((a, b) => a.startedAt - b.startedAt)[0];
-				console.log(`[VOD] Max streams reached, stopping oldest stream: ${oldest.channel}`);
-				streamlink.stopStream(oldest.channel);
-			}
-			await new Promise(resolve => setTimeout(resolve, 500));
-		}
-
-		// Start the stream using the VOD URL
-		console.log(`[VOD] Starting stream for ${videoId}...`);
-		const result = await streamlink.startStream(streamKey, quality, vodUrl);
-
-		if (result.success) {
-			console.log(`[VOD] Stream started, redirecting to ${result.url}`);
-			streamlink.trackClientConnect(streamKey);
-			return res.redirect(302, result.url);
+		if (result.success && result.directUrl) {
+			console.log(`[VOD] Redirecting to direct URL for ${videoId}`);
+			return res.redirect(302, result.directUrl);
 		} else {
-			console.error(`[VOD] Failed to start stream: ${result.error}`);
+			console.error(`[VOD] Failed to get URL: ${result.error}`);
 			return res.status(503).send(`Stream unavailable: ${result.error || 'Unknown error'}`);
 		}
 	} catch (error) {
@@ -778,55 +746,23 @@ app.get("/vod/:videoId", async (req, res) => {
 	}
 });
 
-// Twitch Clip on-demand stream endpoint
+// Twitch Clip on-demand stream endpoint - redirects directly to Twitch CDN
 app.get("/clip/:clipId", async (req, res) => {
-	const { clipId } = req.params;
+	// Strip .mp4 extension if present (for UHF IPTV player compatibility)
+	const clipId = req.params.clipId.replace(/\.mp4$/i, '');
 	const quality = req.query.quality || null;
 
 	console.log(`[Clip] Request for clip: ${clipId}`);
 
 	try {
-		const clipUrl = `https://clips.twitch.tv/${clipId}`;
+		// Get direct URL from yt-dlp and redirect to it
+		const result = await ytdlp.getTwitchClipDirectUrl(clipId, quality);
 
-		// Check if stream is already running
-		const streamKey = `clip:${clipId}`;
-		if (streamlink.isStreamActive(streamKey)) {
-			const streams = streamlink.getActiveStreams();
-			const stream = streams.find(s => s.channel === streamKey);
-			if (stream) {
-				console.log(`[Clip] Stream already active, redirecting to ${stream.url}`);
-				streamlink.trackClientConnect(streamKey);
-				return res.redirect(302, stream.url);
-			}
-		}
-
-		// Check if we have room for another stream
-		const activeStreams = streamlink.getActiveStreams();
-		const maxStreams = config.server.streamPortEnd - config.server.streamPortStart + 1;
-
-		if (activeStreams.length >= maxStreams) {
-			const oldestWithoutClients = streamlink.getOldestStreamWithoutClients();
-			if (oldestWithoutClients) {
-				console.log(`[Clip] Max streams reached, stopping oldest without clients: ${oldestWithoutClients}`);
-				streamlink.stopStream(oldestWithoutClients);
-			} else {
-				const oldest = activeStreams.sort((a, b) => a.startedAt - b.startedAt)[0];
-				console.log(`[Clip] Max streams reached, stopping oldest stream: ${oldest.channel}`);
-				streamlink.stopStream(oldest.channel);
-			}
-			await new Promise(resolve => setTimeout(resolve, 500));
-		}
-
-		// Start the stream using the Clip URL
-		console.log(`[Clip] Starting stream for ${clipId}...`);
-		const result = await streamlink.startStream(streamKey, quality, clipUrl);
-
-		if (result.success) {
-			console.log(`[Clip] Stream started, redirecting to ${result.url}`);
-			streamlink.trackClientConnect(streamKey);
-			return res.redirect(302, result.url);
+		if (result.success && result.directUrl) {
+			console.log(`[Clip] Redirecting to direct URL for ${clipId}`);
+			return res.redirect(302, result.directUrl);
 		} else {
-			console.error(`[Clip] Failed to start stream: ${result.error}`);
+			console.error(`[Clip] Failed to get URL: ${result.error}`);
 			return res.status(503).send(`Stream unavailable: ${result.error || 'Unknown error'}`);
 		}
 	} catch (error) {
@@ -867,8 +803,23 @@ app.get("/playlist-vods.m3u", async (req, res) => {
 				? video.thumbnail_url.replace('%{width}', '320').replace('%{height}', '180')
 				: '';
 
-			m3u += `#EXTINF:-1 tvg-id="${video.id}" tvg-name="${sanitize(channelName)}" tvg-logo="${thumbnail}" group-title="Twitch VODs",${fullTitle}\n`;
-			m3u += `http://${streamHost}:${streamPort}/vod/${video.id}\n`;
+			// Parse duration from Twitch format (e.g., "3h2m1s" or "45m30s")
+			let durationSecs = -1;
+			if (video.duration) {
+				const match = video.duration.match(/(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/);
+				if (match) {
+					const hours = parseInt(match[1]) || 0;
+					const mins = parseInt(match[2]) || 0;
+					const secs = parseInt(match[3]) || 0;
+					durationSecs = hours * 3600 + mins * 60 + secs;
+				}
+			}
+
+			// Mark as VOD for IPTV players like UHF
+			// - Use .mp4 extension in URL (critical for UHF to detect as movie/VOD)
+			// - Keep tvg-logo for thumbnails
+			m3u += `#EXTINF:${durationSecs} tvg-logo="${thumbnail}" group-title="Twitch VODs",${fullTitle}\n`;
+			m3u += `http://${streamHost}:${streamPort}/vod/${video.id}.mp4\n`;
 		}
 
 		res.setHeader('Content-Type', 'audio/x-mpegurl');
@@ -876,7 +827,7 @@ app.get("/playlist-vods.m3u", async (req, res) => {
 		res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 		res.send(m3u);
 
-		console.log(`[Playlist] Generated VODs M3U with ${videos.length} videos`);
+		console.log(`[Playlist] Generated VODs M3U with ${videos.length} videos (UHF VOD format)`);
 	} catch (error) {
 		console.error("Error generating VODs playlist:", error);
 		res.status(500).send(`Error generating playlist: ${error.message}`);
@@ -910,9 +861,13 @@ app.get("/playlist-clips.m3u", async (req, res) => {
 				.replace(/\r/g, '');
 
 			const fullTitle = sanitize(`${clip.broadcaster_name} - ${clip.title}`);
+			// Clips have a duration field in seconds from Twitch API
+			const durationSecs = Math.round(clip.duration) || -1;
 
-			m3u += `#EXTINF:-1 tvg-id="${clip.id}" tvg-name="${sanitize(clip.broadcaster_name)}" tvg-logo="${clip.thumbnail_url}" group-title="Twitch Clips",${fullTitle}\n`;
-			m3u += `http://${streamHost}:${streamPort}/clip/${clip.id}\n`;
+			// Mark as VOD for IPTV players like UHF
+			// - Use .mp4 extension in URL (critical for UHF to detect as movie/VOD)
+			m3u += `#EXTINF:${durationSecs} tvg-logo="${clip.thumbnail_url}" group-title="Twitch Clips",${fullTitle}\n`;
+			m3u += `http://${streamHost}:${streamPort}/clip/${clip.id}.mp4\n`;
 		}
 
 		res.setHeader('Content-Type', 'audio/x-mpegurl');
@@ -920,7 +875,7 @@ app.get("/playlist-clips.m3u", async (req, res) => {
 		res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 		res.send(m3u);
 
-		console.log(`[Playlist] Generated Clips M3U with ${clips.length} clips`);
+		console.log(`[Playlist] Generated Clips M3U with ${clips.length} clips (UHF VOD format)`);
 	} catch (error) {
 		console.error("Error generating Clips playlist:", error);
 		res.status(500).send(`Error generating playlist: ${error.message}`);
@@ -998,8 +953,22 @@ app.get("/playlist-vods-favorites.m3u", async (req, res) => {
 				? video.thumbnail_url.replace('%{width}', '320').replace('%{height}', '180')
 				: '';
 
-			m3u += `#EXTINF:-1 tvg-id="${video.id}" tvg-name="${sanitize(channelName)}" tvg-logo="${thumbnail}" group-title="Twitch VODs (Favorites)",${fullTitle}\n`;
-			m3u += `http://${streamHost}:${streamPort}/vod/${video.id}\n`;
+			// Parse duration from Twitch format (e.g., "3h2m1s" or "45m30s")
+			let durationSecs = -1;
+			if (video.duration) {
+				const match = video.duration.match(/(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/);
+				if (match) {
+					const hours = parseInt(match[1]) || 0;
+					const mins = parseInt(match[2]) || 0;
+					const secs = parseInt(match[3]) || 0;
+					durationSecs = hours * 3600 + mins * 60 + secs;
+				}
+			}
+
+			// Mark as VOD for IPTV players like UHF
+			// - Use .mp4 extension in URL (critical for UHF to detect as movie/VOD)
+			m3u += `#EXTINF:${durationSecs} tvg-logo="${thumbnail}" group-title="Twitch VODs (Favorites)",${fullTitle}\n`;
+			m3u += `http://${streamHost}:${streamPort}/vod/${video.id}.mp4\n`;
 		}
 
 		res.setHeader('Content-Type', 'audio/x-mpegurl');
@@ -1007,7 +976,7 @@ app.get("/playlist-vods-favorites.m3u", async (req, res) => {
 		res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 		res.send(m3u);
 
-		console.log(`[Playlist] Generated VODs Favorites M3U with ${videos.length} videos from ${favoriteChannels.length} channels`);
+		console.log(`[Playlist] Generated VODs Favorites M3U with ${videos.length} videos from ${favoriteChannels.length} channels (UHF VOD format)`);
 	} catch (error) {
 		console.error("Error generating VODs Favorites playlist:", error);
 		res.status(500).send(`Error generating playlist: ${error.message}`);
@@ -1076,9 +1045,13 @@ app.get("/playlist-clips-favorites.m3u", async (req, res) => {
 				.replace(/\r/g, '');
 
 			const fullTitle = sanitize(`${clip.broadcaster_name} - ${clip.title}`);
+			// Clips have a duration field in seconds from Twitch API
+			const durationSecs = Math.round(clip.duration) || -1;
 
-			m3u += `#EXTINF:-1 tvg-id="${clip.id}" tvg-name="${sanitize(clip.broadcaster_name)}" tvg-logo="${clip.thumbnail_url}" group-title="Twitch Clips (Favorites)",${fullTitle}\n`;
-			m3u += `http://${streamHost}:${streamPort}/clip/${clip.id}\n`;
+			// Mark as VOD for IPTV players like UHF
+			// - Use .mp4 extension in URL (critical for UHF to detect as movie/VOD)
+			m3u += `#EXTINF:${durationSecs} tvg-logo="${clip.thumbnail_url}" group-title="Twitch Clips (Favorites)",${fullTitle}\n`;
+			m3u += `http://${streamHost}:${streamPort}/clip/${clip.id}.mp4\n`;
 		}
 
 		res.setHeader('Content-Type', 'audio/x-mpegurl');
@@ -1086,7 +1059,7 @@ app.get("/playlist-clips-favorites.m3u", async (req, res) => {
 		res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
 		res.send(m3u);
 
-		console.log(`[Playlist] Generated Clips Favorites M3U with ${clips.length} clips from ${favoriteChannels.length} channels`);
+		console.log(`[Playlist] Generated Clips Favorites M3U with ${clips.length} clips from ${favoriteChannels.length} channels (UHF VOD format)`);
 	} catch (error) {
 		console.error("Error generating Clips Favorites playlist:", error);
 		res.status(500).send(`Error generating playlist: ${error.message}`);
@@ -1211,8 +1184,12 @@ app.get("/playlist-youtube.m3u", async (req, res) => {
 
 			const fullTitle = sanitize(`${video.channelName} - ${video.title}`);
 
-			m3u += `#EXTINF:-1 tvg-id="${video.videoId}" tvg-name="${sanitize(video.channelName)}" tvg-logo="${video.thumbnail}" group-title="YouTube",${fullTitle} (${dateStr})\n`;
-			m3u += `http://${streamHost}:${streamPort}/youtube/${video.videoId}\n`;
+			// Mark as VOD for IPTV players like UHF
+			// - Use .mp4 extension in URL (critical for UHF to detect as movie/VOD)
+			// - Use 1800 (30 min) as default duration (YouTube RSS doesn't provide duration)
+			const defaultDuration = 1800;
+			m3u += `#EXTINF:${defaultDuration} tvg-logo="${video.thumbnail}" group-title="YouTube",${fullTitle} (${dateStr})\n`;
+			m3u += `http://${streamHost}:${streamPort}/youtube/${video.videoId}.mp4\n`;
 		}
 
 		res.setHeader('Content-Type', 'audio/x-mpegurl');
@@ -1222,59 +1199,78 @@ app.get("/playlist-youtube.m3u", async (req, res) => {
 		res.setHeader('Expires', '0');
 		res.send(m3u);
 
-		console.log(`[Playlist] Generated YouTube M3U with ${videos.length} videos from ${channels.length} channels`);
+		console.log(`[Playlist] Generated YouTube M3U with ${videos.length} videos from ${channels.length} channels (UHF VOD format)`);
 	} catch (error) {
 		console.error("Error generating YouTube playlist:", error);
 		res.status(500).send(`Error generating playlist: ${error.message}`);
 	}
 });
 
-// YouTube on-demand stream endpoint (using yt-dlp)
-app.get("/youtube/:videoId", async (req, res) => {
+// Twitch VOD direct URL API endpoint (returns JSON with seekable direct URL)
+app.get("/api/vod/direct/:videoId", async (req, res) => {
 	const { videoId } = req.params;
+	const quality = req.query.quality || null;
+
+	console.log(`[VOD-API] Getting direct URL for: ${videoId}`);
+
+	try {
+		const result = await ytdlp.getTwitchVodDirectUrl(videoId, quality);
+		res.json(result);
+	} catch (error) {
+		console.error(`[VOD-API] Error: ${error.message}`);
+		res.status(503).json({ error: error.message });
+	}
+});
+
+// Twitch Clip direct URL API endpoint (returns JSON with seekable direct URL)
+app.get("/api/clip/direct/:clipId", async (req, res) => {
+	const { clipId } = req.params;
+	const quality = req.query.quality || null;
+
+	console.log(`[Clip-API] Getting direct URL for: ${clipId}`);
+
+	try {
+		const result = await ytdlp.getTwitchClipDirectUrl(clipId, quality);
+		res.json(result);
+	} catch (error) {
+		console.error(`[Clip-API] Error: ${error.message}`);
+		res.status(503).json({ error: error.message });
+	}
+});
+
+// YouTube direct URL API endpoint (returns JSON with seekable direct URL)
+app.get("/api/youtube/direct/:videoId", async (req, res) => {
+	const { videoId } = req.params;
+	const quality = req.query.quality || null;
+
+	console.log(`[YouTube-API] Getting direct URL for: ${videoId}`);
+
+	try {
+		const result = await ytdlp.getDirectUrl(videoId, quality);
+		res.json(result);
+	} catch (error) {
+		console.error(`[YouTube-API] Error: ${error.message}`);
+		res.status(503).json({ error: error.message });
+	}
+});
+
+// YouTube on-demand stream endpoint - redirects directly to YouTube CDN (seekable!)
+app.get("/youtube/:videoId", async (req, res) => {
+	// Strip .mp4 extension if present (for UHF IPTV player compatibility)
+	const videoId = req.params.videoId.replace(/\.mp4$/i, '');
 	const quality = req.query.quality || null;
 
 	console.log(`[YouTube] Request for video: ${videoId}`);
 
 	try {
-		// Check if stream is already running
-		if (ytdlp.isStreamActive(videoId)) {
-			const streams = ytdlp.getActiveStreams();
-			const stream = streams.find(s => s.videoId === videoId);
-			if (stream) {
-				console.log(`[YouTube] Stream already active, redirecting to ${stream.url}`);
-				ytdlp.trackClientConnect(videoId);
-				return res.redirect(302, stream.url);
-			}
-		}
+		// Get direct URL from yt-dlp and redirect to it
+		const result = await ytdlp.getDirectUrl(videoId, quality);
 
-		// Check if we have room for another stream
-		const activeStreams = ytdlp.getActiveStreams();
-		const maxStreams = config.server.streamPortEnd - config.server.streamPortStart + 1;
-
-		if (activeStreams.length >= maxStreams) {
-			const oldestWithoutClients = ytdlp.getOldestStreamWithoutClients();
-			if (oldestWithoutClients) {
-				console.log(`[YouTube] Max streams reached, stopping oldest without clients: ${oldestWithoutClients}`);
-				ytdlp.stopStream(oldestWithoutClients);
-			} else if (activeStreams.length > 0) {
-				const oldest = activeStreams.sort((a, b) => a.startedAt - b.startedAt)[0];
-				console.log(`[YouTube] Max streams reached, stopping oldest stream: ${oldest.videoId}`);
-				ytdlp.stopStream(oldest.videoId);
-			}
-			await new Promise(resolve => setTimeout(resolve, 500));
-		}
-
-		// Start the stream using yt-dlp
-		console.log(`[YouTube] Starting stream for ${videoId} using yt-dlp...`);
-		const result = await ytdlp.startStream(videoId, quality);
-
-		if (result.success) {
-			console.log(`[YouTube] Stream started, redirecting to ${result.url}`);
-			ytdlp.trackClientConnect(videoId);
-			return res.redirect(302, result.url);
+		if (result.success && result.directUrl) {
+			console.log(`[YouTube] Redirecting to direct URL for ${videoId}`);
+			return res.redirect(302, result.directUrl);
 		} else {
-			console.error(`[YouTube] Failed to start stream: ${result.error}`);
+			console.error(`[YouTube] Failed to get URL: ${result.error}`);
 			return res.status(503).send(`Stream unavailable: ${result.error || 'Unknown error'}`);
 		}
 	} catch (error) {

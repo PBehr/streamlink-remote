@@ -468,14 +468,23 @@ class App {
 	}
 
 	async playVod(videoId, title, channel) {
-		const streamHost = window.location.hostname;
-		const streamPort = window.location.port || "80";
-		const streamUrl = `http://${streamHost}:${streamPort}/vod/${videoId}`;
-
-		this.showVodModal(videoId, title, channel, streamUrl);
+		this.showLoading();
+		try {
+			// Get direct URL from yt-dlp (seekable!)
+			const result = await api.getVodDirectUrl(videoId);
+			if (result.success && result.directUrl) {
+				this.showVodModal(videoId, title, channel, result.directUrl);
+			} else {
+				throw new Error(result.error || "Failed to get VOD URL");
+			}
+		} catch (error) {
+			this.showToast(`Error playing VOD: ${error.message}`, "error");
+		} finally {
+			this.hideLoading();
+		}
 	}
 
-	showVodModal(videoId, title, channel, streamUrl) {
+	showVodModal(videoId, title, channel, directUrl) {
 		const modal = document.getElementById("stream-modal");
 		const modalBody = document.getElementById("modal-body");
 
@@ -483,16 +492,17 @@ class App {
 			<h2>📼 ${this.escapeHtml(title)}</h2>
 			<p class="text-muted">${this.escapeHtml(channel)}</p>
 			<div class="active-stream-url">
-				<code>${streamUrl}</code>
-				<button class="btn btn-small" onclick="app.copyToClipboard('${streamUrl}')">Copy</button>
+				<code style="font-size: 0.75rem; word-break: break-all;">${directUrl.substring(0, 80)}...</code>
+				<button class="btn btn-small" onclick="app.copyToClipboard('${directUrl}')">Copy</button>
 			</div>
+			<p style="margin: 0.5rem 0; color: var(--success);">✓ Direktlink bereit (Spulen möglich!)</p>
 			<div style="margin-top: 1rem;">
-				<button class="btn btn-primary" onclick="app.openInPlayer('${streamUrl}')">Open in VLC</button>
+				<button class="btn btn-primary" onclick="app.openInPlayer('${directUrl}')">Open in VLC</button>
 				<button class="btn" onclick="window.open('https://www.twitch.tv/videos/${videoId}', '_blank')">Open on Twitch</button>
 				<button class="btn" onclick="app.closeModal()">Close</button>
 			</div>
 			<p style="margin-top: 1rem; color: var(--text-muted); font-size: 0.875rem;">
-				💡 The stream will start when you open it in a player
+				⚠️ Link expires in ~6 hours
 			</p>
 		`;
 
@@ -569,8 +579,12 @@ class App {
 			year: "numeric"
 		});
 
+		// Store VOD info in data attributes
+		const vodId = clip.video_id || "";
+		const vodOffset = clip.vod_offset || 0;
+
 		return `
-			<div class="stream-card clip-card" data-clip-id="${clip.id}" data-title="${this.escapeHtml(clip.title)}" data-channel="${this.escapeHtml(clip.broadcaster_name)}">
+			<div class="stream-card clip-card" data-clip-id="${clip.id}" data-title="${this.escapeHtml(clip.title)}" data-channel="${this.escapeHtml(clip.broadcaster_name)}" data-vod-id="${vodId}" data-vod-offset="${vodOffset}">
 				<div class="stream-thumbnail-container">
 					<img src="${clip.thumbnail_url}" alt="${this.escapeHtml(clip.title)}" class="stream-thumbnail">
 					<span class="clip-badge">Clip</span>
@@ -598,38 +612,74 @@ class App {
 				const clipId = card.dataset.clipId;
 				const title = card.dataset.title;
 				const channel = card.dataset.channel;
-				this.playClip(clipId, title, channel);
+				const vodId = card.dataset.vodId;
+				const vodOffset = parseInt(card.dataset.vodOffset) || 0;
+				this.playClip(clipId, title, channel, vodId, vodOffset);
 			});
 		});
 	}
 
-	async playClip(clipId, title, channel) {
-		const streamHost = window.location.hostname;
-		const streamPort = window.location.port || "80";
-		const streamUrl = `http://${streamHost}:${streamPort}/clip/${clipId}`;
-
-		this.showClipModal(clipId, title, channel, streamUrl);
+	async playClip(clipId, title, channel, vodId = null, vodOffset = 0) {
+		this.showLoading();
+		try {
+			// Get direct URL from yt-dlp (seekable!)
+			const result = await api.getClipDirectUrl(clipId);
+			if (result.success && result.directUrl) {
+				this.showClipModal(clipId, title, channel, result.directUrl, vodId, vodOffset);
+			} else {
+				throw new Error(result.error || "Failed to get Clip URL");
+			}
+		} catch (error) {
+			this.showToast(`Error playing Clip: ${error.message}`, "error");
+		} finally {
+			this.hideLoading();
+		}
 	}
 
-	showClipModal(clipId, title, channel, streamUrl) {
+	formatVodTimestamp(seconds) {
+		const hours = Math.floor(seconds / 3600);
+		const minutes = Math.floor((seconds % 3600) / 60);
+		const secs = seconds % 60;
+		if (hours > 0) {
+			return `${hours}h ${minutes}m ${secs}s`;
+		}
+		return `${minutes}m ${secs}s`;
+	}
+
+	showClipModal(clipId, title, channel, directUrl, vodId = null, vodOffset = 0) {
 		const modal = document.getElementById("stream-modal");
 		const modalBody = document.getElementById("modal-body");
+
+		// Build VOD link section if VOD info is available
+		let vodSection = "";
+		if (vodId) {
+			const vodTimestamp = this.formatVodTimestamp(vodOffset);
+			const twitchVodUrl = `https://www.twitch.tv/videos/${vodId}?t=${Math.floor(vodOffset / 3600)}h${Math.floor((vodOffset % 3600) / 60)}m${vodOffset % 60}s`;
+			vodSection = `
+				<div style="margin-top: 1rem; padding: 0.75rem; background: var(--surface-elevated); border-radius: 8px;">
+					<p style="margin: 0 0 0.5rem 0; font-size: 0.875rem;">📼 <strong>Aus VOD:</strong> ${vodTimestamp}</p>
+					<div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+						<button class="btn btn-small" onclick="window.open('${twitchVodUrl}', '_blank')">VOD auf Twitch öffnen</button>
+						<button class="btn btn-small" onclick="app.playVodFromClip('${vodId}', '${channel}', ${vodOffset})">VOD hier abspielen</button>
+					</div>
+				</div>
+			`;
+		}
 
 		modalBody.innerHTML = `
 			<h2>✂️ ${this.escapeHtml(title)}</h2>
 			<p class="text-muted">${this.escapeHtml(channel)}</p>
 			<div class="active-stream-url">
-				<code>${streamUrl}</code>
-				<button class="btn btn-small" onclick="app.copyToClipboard('${streamUrl}')">Copy</button>
+				<code style="font-size: 0.75rem; word-break: break-all;">${directUrl.substring(0, 80)}...</code>
+				<button class="btn btn-small" onclick="app.copyToClipboard('${directUrl}')">Copy</button>
 			</div>
+			<p style="margin: 0.5rem 0; color: var(--success);">✓ Direktlink bereit</p>
 			<div style="margin-top: 1rem;">
-				<button class="btn btn-primary" onclick="app.openInPlayer('${streamUrl}')">Open in VLC</button>
-				<button class="btn" onclick="window.open('https://clips.twitch.tv/${clipId}', '_blank')">Open on Twitch</button>
+				<button class="btn btn-primary" onclick="app.openInPlayer('${directUrl}')">Open in VLC</button>
+				<button class="btn" onclick="window.open('https://clips.twitch.tv/${clipId}', '_blank')">Clip auf Twitch</button>
 				<button class="btn" onclick="app.closeModal()">Close</button>
 			</div>
-			<p style="margin-top: 1rem; color: var(--text-muted); font-size: 0.875rem;">
-				💡 The stream will start when you open it in a player
-			</p>
+			${vodSection}
 		`;
 
 		modal.classList.remove("hidden");
@@ -641,6 +691,25 @@ class App {
 		modal.querySelector(".modal-close").addEventListener("click", () => {
 			this.closeModal();
 		});
+	}
+
+	async playVodFromClip(vodId, channel, offset) {
+		this.closeModal();
+		this.showLoading();
+		try {
+			const result = await api.getVodDirectUrl(vodId);
+			if (result.success && result.directUrl) {
+				const offsetNote = this.formatVodTimestamp(offset);
+				this.showVodModal(vodId, `VOD von ${channel} (ab ${offsetNote})`, channel, result.directUrl);
+				this.showToast(`Hinweis: Starte Video bei ${offsetNote}`, "info");
+			} else {
+				throw new Error(result.error || "Failed to get VOD URL");
+			}
+		} catch (error) {
+			this.showToast(`Error: ${error.message}`, "error");
+		} finally {
+			this.hideLoading();
+		}
 	}
 
 	// YouTube
@@ -771,13 +840,14 @@ class App {
 		this.showLoading();
 
 		try {
-			// Get the stream URL by making a request to our endpoint
-			const streamHost = window.location.hostname;
-			const streamPort = window.location.port || "80";
-			const streamUrl = `http://${streamHost}:${streamPort}/youtube/${videoId}`;
+			// Get direct URL from yt-dlp (seekable!)
+			const result = await api.getYoutubeDirectUrl(videoId);
 
-			// Show modal with stream URL
-			this.showYouTubeModal(videoId, title, streamUrl);
+			if (result.success && result.directUrl) {
+				this.showYouTubeModal(videoId, title, result.directUrl);
+			} else {
+				throw new Error(result.error || "Failed to get video URL");
+			}
 		} catch (error) {
 			this.showToast(`Error playing video: ${error.message}`, "error");
 		} finally {
@@ -785,24 +855,27 @@ class App {
 		}
 	}
 
-	showYouTubeModal(videoId, title, streamUrl) {
+	showYouTubeModal(videoId, title, directUrl) {
 		const modal = document.getElementById("stream-modal");
 		const modalBody = document.getElementById("modal-body");
 
+		// Escape the URL for use in onclick handlers
+		const escapedUrl = directUrl.replace(/'/g, "\\'");
+
 		modalBody.innerHTML = `
 			<h2>🎬 ${this.escapeHtml(title)}</h2>
-			<p>Stream URL ready!</p>
-			<div class="active-stream-url">
-				<code>${streamUrl}</code>
-				<button class="btn btn-small" onclick="app.copyToClipboard('${streamUrl}')">Copy</button>
+			<p style="color: var(--success);">✓ Direktlink bereit (Spulen möglich!)</p>
+			<div class="active-stream-url" style="word-break: break-all;">
+				<code style="font-size: 0.7rem; max-height: 60px; overflow: auto; display: block;">${this.escapeHtml(directUrl.substring(0, 200))}...</code>
+				<button class="btn btn-small" onclick="app.copyToClipboard('${escapedUrl}')">Copy</button>
 			</div>
 			<div style="margin-top: 1rem;">
-				<button class="btn btn-primary" onclick="app.openInPlayer('${streamUrl}')">Open in VLC</button>
+				<button class="btn btn-primary" onclick="app.openInPlayer('${escapedUrl}')">Open in VLC</button>
 				<button class="btn" onclick="window.open('https://www.youtube.com/watch?v=${videoId}', '_blank')">Open on YouTube</button>
 				<button class="btn" onclick="app.closeModal()">Close</button>
 			</div>
-			<p style="margin-top: 1rem; color: var(--text-muted); font-size: 0.875rem;">
-				💡 The stream will start when you open it in a player
+			<p style="margin-top: 1rem; color: var(--warning); font-size: 0.875rem;">
+				⚠️ Link gültig für ca. 6 Stunden
 			</p>
 		`;
 
