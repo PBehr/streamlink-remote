@@ -687,6 +687,65 @@ body {
 	font-weight: 600;
 }
 
+/* VOD and Clip badges */
+.vod-badge {
+	position: absolute;
+	top: 0.5rem;
+	left: 0.5rem;
+	background: #9146ff;
+	color: white;
+	padding: 0.25rem 0.5rem;
+	border-radius: 0.25rem;
+	font-size: 0.75rem;
+	font-weight: 600;
+}
+
+.clip-badge {
+	position: absolute;
+	top: 0.5rem;
+	left: 0.5rem;
+	background: #ff6b00;
+	color: white;
+	padding: 0.25rem 0.5rem;
+	border-radius: 0.25rem;
+	font-size: 0.75rem;
+	font-weight: 600;
+}
+
+.vod-duration,
+.clip-duration {
+	position: absolute;
+	bottom: 0.5rem;
+	right: 0.5rem;
+	background: rgba(0, 0, 0, 0.8);
+	color: white;
+	padding: 0.2rem 0.4rem;
+	border-radius: 0.25rem;
+	font-size: 0.75rem;
+	font-weight: 500;
+}
+
+/* View header with filters */
+.view-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 1rem;
+	margin-bottom: 1rem;
+}
+
+.view-filters {
+	display: flex;
+	gap: 0.5rem;
+	align-items: center;
+}
+
+.select-small {
+	padding: 0.4rem 0.75rem;
+	font-size: 0.875rem;
+}
+
 .youtube-card {
 	cursor: pointer;
 }

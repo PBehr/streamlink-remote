@@ -40,6 +40,14 @@
 				<span class="icon">🔍</span>
 				Search
 			</button>
+			<button class="nav-item" data-view="vods">
+				<span class="icon">📼</span>
+				VODs
+			</button>
+			<button class="nav-item" data-view="clips">
+				<span class="icon">✂️</span>
+				Clips
+			</button>
 			<button class="nav-item" data-view="youtube">
 				<span class="icon">📺</span>
 				YouTube
@@ -101,6 +109,52 @@
 				<div id="search-results" class="stream-grid"></div>
 				<div id="search-empty" class="empty-state hidden">
 					<p>Enter a channel name to search</p>
+				</div>
+			</div>
+
+			<!-- VODs View -->
+			<div id="view-vods" class="view">
+				<div class="view-header">
+					<h2>Twitch VODs</h2>
+					<div class="view-filters">
+						<select id="vods-channel-select" class="select select-small">
+							<option value="">All Channels</option>
+						</select>
+						<select id="vods-type-select" class="select select-small">
+							<option value="archive">Past Broadcasts</option>
+							<option value="highlight">Highlights</option>
+							<option value="upload">Uploads</option>
+							<option value="all">All</option>
+						</select>
+					</div>
+				</div>
+				<div id="vods-list" class="stream-grid"></div>
+				<div id="vods-empty" class="empty-state hidden">
+					<p>No VODs found</p>
+					<p class="text-muted">VODs from your followed channels will appear here</p>
+				</div>
+			</div>
+
+			<!-- Clips View -->
+			<div id="view-clips" class="view">
+				<div class="view-header">
+					<h2>Twitch Clips</h2>
+					<div class="view-filters">
+						<select id="clips-channel-select" class="select select-small">
+							<option value="">All Channels</option>
+						</select>
+						<select id="clips-period-select" class="select select-small">
+							<option value="day" selected>Last 24 Hours</option>
+							<option value="week">Last Week</option>
+							<option value="month">Last Month</option>
+							<option value="all">All Time</option>
+						</select>
+					</div>
+				</div>
+				<div id="clips-list" class="stream-grid"></div>
+				<div id="clips-empty" class="empty-state hidden">
+					<p>No clips found</p>
+					<p class="text-muted">Clips from your followed channels will appear here</p>
 				</div>
 			</div>
 

@@ -47,6 +47,7 @@ const Database = require("./database");
 const TwitchAPI = require("./twitch-api");
 const StreamlinkManager = require("./streamlink");
 const YouTubeService = require("./youtube");
+const YtDlpManager = require("./ytdlp");
 
 const app = express();
 const server = http.createServer(app);
@@ -58,6 +59,7 @@ db.init(); // Create tables if they don't exist
 const twitchAPI = new TwitchAPI(config.twitch, db);
 const streamlink = new StreamlinkManager(config.streamlink, config.server);
 const youtubeService = new YouTubeService();
+const ytdlp = new YtDlpManager(config.server);
 
 // Middleware
 app.use(cors());
@@ -679,6 +681,418 @@ app.put("/api/settings", (req, res) => {
 	}
 });
 
+// Twitch VODs API endpoint
+app.get("/api/vods", async (req, res) => {
+	if (!twitchAPI.isAuthenticated()) {
+		return res.status(401).json({ error: "Not authenticated" });
+	}
+
+	const userId = req.query.user_id || null;
+	const limit = parseInt(req.query.limit) || 25;
+	const type = req.query.type || "archive"; // archive, highlight, upload, all
+
+	try {
+		const videos = await twitchAPI.getVideos(userId, limit, type);
+		res.json({ videos });
+		console.log(`[VODs] Fetched ${videos.length} videos`);
+	} catch (error) {
+		console.error("Error fetching VODs:", error);
+		res.status(500).json({ error: error.message });
+	}
+});
+
+// Twitch Clips API endpoint
+app.get("/api/clips", async (req, res) => {
+	if (!twitchAPI.isAuthenticated()) {
+		return res.status(401).json({ error: "Not authenticated" });
+	}
+
+	const broadcasterId = req.query.broadcaster_id || null;
+	const limit = parseInt(req.query.limit) || 25;
+	const period = req.query.period || "week"; // day, week, month, all
+
+	try {
+		const clips = await twitchAPI.getClips(broadcasterId, limit, period);
+		res.json({ clips });
+		console.log(`[Clips] Fetched ${clips.length} clips`);
+	} catch (error) {
+		console.error("Error fetching clips:", error);
+		res.status(500).json({ error: error.message });
+	}
+});
+
+// Twitch VOD on-demand stream endpoint
+app.get("/vod/:videoId", async (req, res) => {
+	const { videoId } = req.params;
+	const quality = req.query.quality || null;
+
+	console.log(`[VOD] Request for video: ${videoId}`);
+
+	try {
+		const vodUrl = `https://www.twitch.tv/videos/${videoId}`;
+
+		// Check if stream is already running
+		const streamKey = `vod:${videoId}`;
+		if (streamlink.isStreamActive(streamKey)) {
+			const streams = streamlink.getActiveStreams();
+			const stream = streams.find(s => s.channel === streamKey);
+			if (stream) {
+				console.log(`[VOD] Stream already active, redirecting to ${stream.url}`);
+				streamlink.trackClientConnect(streamKey);
+				return res.redirect(302, stream.url);
+			}
+		}
+
+		// Check if we have room for another stream
+		const activeStreams = streamlink.getActiveStreams();
+		const maxStreams = config.server.streamPortEnd - config.server.streamPortStart + 1;
+
+		if (activeStreams.length >= maxStreams) {
+			const oldestWithoutClients = streamlink.getOldestStreamWithoutClients();
+			if (oldestWithoutClients) {
+				console.log(`[VOD] Max streams reached, stopping oldest without clients: ${oldestWithoutClients}`);
+				streamlink.stopStream(oldestWithoutClients);
+			} else {
+				const oldest = activeStreams.sort((a, b) => a.startedAt - b.startedAt)[0];
+				console.log(`[VOD] Max streams reached, stopping oldest stream: ${oldest.channel}`);
+				streamlink.stopStream(oldest.channel);
+			}
+			await new Promise(resolve => setTimeout(resolve, 500));
+		}
+
+		// Start the stream using the VOD URL
+		console.log(`[VOD] Starting stream for ${videoId}...`);
+		const result = await streamlink.startStream(streamKey, quality, vodUrl);
+
+		if (result.success) {
+			console.log(`[VOD] Stream started, redirecting to ${result.url}`);
+			streamlink.trackClientConnect(streamKey);
+			return res.redirect(302, result.url);
+		} else {
+			console.error(`[VOD] Failed to start stream: ${result.error}`);
+			return res.status(503).send(`Stream unavailable: ${result.error || 'Unknown error'}`);
+		}
+	} catch (error) {
+		console.error(`[VOD] Error: ${error.message}`);
+		return res.status(503).send(`Stream unavailable: ${error.message}`);
+	}
+});
+
+// Twitch Clip on-demand stream endpoint
+app.get("/clip/:clipId", async (req, res) => {
+	const { clipId } = req.params;
+	const quality = req.query.quality || null;
+
+	console.log(`[Clip] Request for clip: ${clipId}`);
+
+	try {
+		const clipUrl = `https://clips.twitch.tv/${clipId}`;
+
+		// Check if stream is already running
+		const streamKey = `clip:${clipId}`;
+		if (streamlink.isStreamActive(streamKey)) {
+			const streams = streamlink.getActiveStreams();
+			const stream = streams.find(s => s.channel === streamKey);
+			if (stream) {
+				console.log(`[Clip] Stream already active, redirecting to ${stream.url}`);
+				streamlink.trackClientConnect(streamKey);
+				return res.redirect(302, stream.url);
+			}
+		}
+
+		// Check if we have room for another stream
+		const activeStreams = streamlink.getActiveStreams();
+		const maxStreams = config.server.streamPortEnd - config.server.streamPortStart + 1;
+
+		if (activeStreams.length >= maxStreams) {
+			const oldestWithoutClients = streamlink.getOldestStreamWithoutClients();
+			if (oldestWithoutClients) {
+				console.log(`[Clip] Max streams reached, stopping oldest without clients: ${oldestWithoutClients}`);
+				streamlink.stopStream(oldestWithoutClients);
+			} else {
+				const oldest = activeStreams.sort((a, b) => a.startedAt - b.startedAt)[0];
+				console.log(`[Clip] Max streams reached, stopping oldest stream: ${oldest.channel}`);
+				streamlink.stopStream(oldest.channel);
+			}
+			await new Promise(resolve => setTimeout(resolve, 500));
+		}
+
+		// Start the stream using the Clip URL
+		console.log(`[Clip] Starting stream for ${clipId}...`);
+		const result = await streamlink.startStream(streamKey, quality, clipUrl);
+
+		if (result.success) {
+			console.log(`[Clip] Stream started, redirecting to ${result.url}`);
+			streamlink.trackClientConnect(streamKey);
+			return res.redirect(302, result.url);
+		} else {
+			console.error(`[Clip] Failed to start stream: ${result.error}`);
+			return res.status(503).send(`Stream unavailable: ${result.error || 'Unknown error'}`);
+		}
+	} catch (error) {
+		console.error(`[Clip] Error: ${error.message}`);
+		return res.status(503).send(`Stream unavailable: ${error.message}`);
+	}
+});
+
+// VODs M3U Playlist endpoint
+app.get("/playlist-vods.m3u", async (req, res) => {
+	if (!twitchAPI.isAuthenticated()) {
+		res.setHeader('Content-Type', 'audio/x-mpegurl');
+		res.setHeader('Content-Disposition', 'attachment; filename="vods.m3u"');
+		return res.send('#EXTM3U\n');
+	}
+
+	try {
+		const limit = parseInt(req.query.limit) || 25;
+		const type = req.query.type || "archive";
+		const videos = await twitchAPI.getVideos(null, limit, type);
+
+		// Build M3U playlist
+		const streamHost = process.env.EXTERNAL_HOST ||
+		                   (config.server.host === "0.0.0.0" ? streamlink.getLocalIpAddress() : config.server.host);
+		const streamPort = config.server.port;
+
+		let m3u = '#EXTM3U\n';
+
+		for (const video of videos) {
+			const sanitize = (str) => str
+				.replace(/"/g, "'")
+				.replace(/\n/g, ' ')
+				.replace(/\r/g, '');
+
+			const channelName = video.user_name || video.broadcaster_name || 'Unknown';
+			const fullTitle = sanitize(`${channelName} - ${video.title}`);
+			const thumbnail = video.thumbnail_url
+				? video.thumbnail_url.replace('%{width}', '320').replace('%{height}', '180')
+				: '';
+
+			m3u += `#EXTINF:-1 tvg-id="${video.id}" tvg-name="${sanitize(channelName)}" tvg-logo="${thumbnail}" group-title="Twitch VODs",${fullTitle}\n`;
+			m3u += `http://${streamHost}:${streamPort}/vod/${video.id}\n`;
+		}
+
+		res.setHeader('Content-Type', 'audio/x-mpegurl');
+		res.setHeader('Content-Disposition', 'attachment; filename="vods.m3u"');
+		res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+		res.send(m3u);
+
+		console.log(`[Playlist] Generated VODs M3U with ${videos.length} videos`);
+	} catch (error) {
+		console.error("Error generating VODs playlist:", error);
+		res.status(500).send(`Error generating playlist: ${error.message}`);
+	}
+});
+
+// Clips M3U Playlist endpoint
+app.get("/playlist-clips.m3u", async (req, res) => {
+	if (!twitchAPI.isAuthenticated()) {
+		res.setHeader('Content-Type', 'audio/x-mpegurl');
+		res.setHeader('Content-Disposition', 'attachment; filename="clips.m3u"');
+		return res.send('#EXTM3U\n');
+	}
+
+	try {
+		const limit = parseInt(req.query.limit) || 25;
+		const period = req.query.period || "week";
+		const clips = await twitchAPI.getClips(null, limit, period);
+
+		// Build M3U playlist
+		const streamHost = process.env.EXTERNAL_HOST ||
+		                   (config.server.host === "0.0.0.0" ? streamlink.getLocalIpAddress() : config.server.host);
+		const streamPort = config.server.port;
+
+		let m3u = '#EXTM3U\n';
+
+		for (const clip of clips) {
+			const sanitize = (str) => str
+				.replace(/"/g, "'")
+				.replace(/\n/g, ' ')
+				.replace(/\r/g, '');
+
+			const fullTitle = sanitize(`${clip.broadcaster_name} - ${clip.title}`);
+
+			m3u += `#EXTINF:-1 tvg-id="${clip.id}" tvg-name="${sanitize(clip.broadcaster_name)}" tvg-logo="${clip.thumbnail_url}" group-title="Twitch Clips",${fullTitle}\n`;
+			m3u += `http://${streamHost}:${streamPort}/clip/${clip.id}\n`;
+		}
+
+		res.setHeader('Content-Type', 'audio/x-mpegurl');
+		res.setHeader('Content-Disposition', 'attachment; filename="clips.m3u"');
+		res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+		res.send(m3u);
+
+		console.log(`[Playlist] Generated Clips M3U with ${clips.length} clips`);
+	} catch (error) {
+		console.error("Error generating Clips playlist:", error);
+		res.status(500).send(`Error generating playlist: ${error.message}`);
+	}
+});
+
+// VODs Favorites M3U Playlist endpoint
+app.get("/playlist-vods-favorites.m3u", async (req, res) => {
+	if (!twitchAPI.isAuthenticated()) {
+		res.setHeader('Content-Type', 'audio/x-mpegurl');
+		res.setHeader('Content-Disposition', 'attachment; filename="vods-favorites.m3u"');
+		return res.send('#EXTM3U\n');
+	}
+
+	try {
+		const limit = parseInt(req.query.limit) || 25;
+		const type = req.query.type || "archive";
+
+		// Get favorites
+		const favorites = db.getFavorites();
+		if (favorites.length === 0) {
+			res.setHeader('Content-Type', 'audio/x-mpegurl');
+			res.setHeader('Content-Disposition', 'attachment; filename="vods-favorites.m3u"');
+			return res.send('#EXTM3U\n');
+		}
+
+		// Get followed channels to find broadcaster IDs for favorites
+		const followedChannels = await twitchAPI.getFollowedChannels();
+		const favoriteLogins = new Set(favorites.map(f => f.channel_login.toLowerCase()));
+		const favoriteChannels = followedChannels.filter(ch =>
+			favoriteLogins.has(ch.broadcaster_login.toLowerCase())
+		);
+
+		if (favoriteChannels.length === 0) {
+			res.setHeader('Content-Type', 'audio/x-mpegurl');
+			res.setHeader('Content-Disposition', 'attachment; filename="vods-favorites.m3u"');
+			return res.send('#EXTM3U\n');
+		}
+
+		// Fetch videos for each favorite channel
+		const allVideos = [];
+		for (const channel of favoriteChannels) {
+			try {
+				const videos = await twitchAPI.getVideos(channel.broadcaster_id, 5, type);
+				allVideos.push(...videos.map(v => ({
+					...v,
+					broadcaster_name: channel.broadcaster_name,
+					broadcaster_login: channel.broadcaster_login
+				})));
+			} catch (e) {
+				console.error(`Error fetching VODs for ${channel.broadcaster_login}:`, e.message);
+			}
+		}
+
+		// Sort by created_at and limit
+		allVideos.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+		const videos = allVideos.slice(0, limit);
+
+		// Build M3U playlist
+		const streamHost = process.env.EXTERNAL_HOST ||
+		                   (config.server.host === "0.0.0.0" ? streamlink.getLocalIpAddress() : config.server.host);
+		const streamPort = config.server.port;
+
+		let m3u = '#EXTM3U\n';
+
+		for (const video of videos) {
+			const sanitize = (str) => str
+				.replace(/"/g, "'")
+				.replace(/\n/g, ' ')
+				.replace(/\r/g, '');
+
+			const channelName = video.user_name || video.broadcaster_name || 'Unknown';
+			const fullTitle = sanitize(`${channelName} - ${video.title}`);
+			const thumbnail = video.thumbnail_url
+				? video.thumbnail_url.replace('%{width}', '320').replace('%{height}', '180')
+				: '';
+
+			m3u += `#EXTINF:-1 tvg-id="${video.id}" tvg-name="${sanitize(channelName)}" tvg-logo="${thumbnail}" group-title="Twitch VODs (Favorites)",${fullTitle}\n`;
+			m3u += `http://${streamHost}:${streamPort}/vod/${video.id}\n`;
+		}
+
+		res.setHeader('Content-Type', 'audio/x-mpegurl');
+		res.setHeader('Content-Disposition', 'attachment; filename="vods-favorites.m3u"');
+		res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+		res.send(m3u);
+
+		console.log(`[Playlist] Generated VODs Favorites M3U with ${videos.length} videos from ${favoriteChannels.length} channels`);
+	} catch (error) {
+		console.error("Error generating VODs Favorites playlist:", error);
+		res.status(500).send(`Error generating playlist: ${error.message}`);
+	}
+});
+
+// Clips Favorites M3U Playlist endpoint
+app.get("/playlist-clips-favorites.m3u", async (req, res) => {
+	if (!twitchAPI.isAuthenticated()) {
+		res.setHeader('Content-Type', 'audio/x-mpegurl');
+		res.setHeader('Content-Disposition', 'attachment; filename="clips-favorites.m3u"');
+		return res.send('#EXTM3U\n');
+	}
+
+	try {
+		const limit = parseInt(req.query.limit) || 25;
+		const period = req.query.period || "day";
+
+		// Get favorites
+		const favorites = db.getFavorites();
+		if (favorites.length === 0) {
+			res.setHeader('Content-Type', 'audio/x-mpegurl');
+			res.setHeader('Content-Disposition', 'attachment; filename="clips-favorites.m3u"');
+			return res.send('#EXTM3U\n');
+		}
+
+		// Get followed channels to find broadcaster IDs for favorites
+		const followedChannels = await twitchAPI.getFollowedChannels();
+		const favoriteLogins = new Set(favorites.map(f => f.channel_login.toLowerCase()));
+		const favoriteChannels = followedChannels.filter(ch =>
+			favoriteLogins.has(ch.broadcaster_login.toLowerCase())
+		);
+
+		if (favoriteChannels.length === 0) {
+			res.setHeader('Content-Type', 'audio/x-mpegurl');
+			res.setHeader('Content-Disposition', 'attachment; filename="clips-favorites.m3u"');
+			return res.send('#EXTM3U\n');
+		}
+
+		// Fetch clips for each favorite channel
+		const allClips = [];
+		for (const channel of favoriteChannels) {
+			try {
+				const clips = await twitchAPI.getClips(channel.broadcaster_id, 10, period);
+				allClips.push(...clips);
+			} catch (e) {
+				console.error(`Error fetching clips for ${channel.broadcaster_login}:`, e.message);
+			}
+		}
+
+		// Sort by view_count and limit
+		allClips.sort((a, b) => b.view_count - a.view_count);
+		const clips = allClips.slice(0, limit);
+
+		// Build M3U playlist
+		const streamHost = process.env.EXTERNAL_HOST ||
+		                   (config.server.host === "0.0.0.0" ? streamlink.getLocalIpAddress() : config.server.host);
+		const streamPort = config.server.port;
+
+		let m3u = '#EXTM3U\n';
+
+		for (const clip of clips) {
+			const sanitize = (str) => str
+				.replace(/"/g, "'")
+				.replace(/\n/g, ' ')
+				.replace(/\r/g, '');
+
+			const fullTitle = sanitize(`${clip.broadcaster_name} - ${clip.title}`);
+
+			m3u += `#EXTINF:-1 tvg-id="${clip.id}" tvg-name="${sanitize(clip.broadcaster_name)}" tvg-logo="${clip.thumbnail_url}" group-title="Twitch Clips (Favorites)",${fullTitle}\n`;
+			m3u += `http://${streamHost}:${streamPort}/clip/${clip.id}\n`;
+		}
+
+		res.setHeader('Content-Type', 'audio/x-mpegurl');
+		res.setHeader('Content-Disposition', 'attachment; filename="clips-favorites.m3u"');
+		res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+		res.send(m3u);
+
+		console.log(`[Playlist] Generated Clips Favorites M3U with ${clips.length} clips from ${favoriteChannels.length} channels`);
+	} catch (error) {
+		console.error("Error generating Clips Favorites playlist:", error);
+		res.status(500).send(`Error generating playlist: ${error.message}`);
+	}
+});
+
 // YouTube Channels API endpoints
 app.get("/api/youtube/channels", (req, res) => {
 	try {
@@ -815,7 +1229,7 @@ app.get("/playlist-youtube.m3u", async (req, res) => {
 	}
 });
 
-// YouTube on-demand stream endpoint
+// YouTube on-demand stream endpoint (using yt-dlp)
 app.get("/youtube/:videoId", async (req, res) => {
 	const { videoId } = req.params;
 	const quality = req.query.quality || null;
@@ -823,44 +1237,41 @@ app.get("/youtube/:videoId", async (req, res) => {
 	console.log(`[YouTube] Request for video: ${videoId}`);
 
 	try {
-		const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-
 		// Check if stream is already running
-		const streamKey = `yt:${videoId}`;
-		if (streamlink.isStreamActive(streamKey)) {
-			const streams = streamlink.getActiveStreams();
-			const stream = streams.find(s => s.channel === streamKey);
+		if (ytdlp.isStreamActive(videoId)) {
+			const streams = ytdlp.getActiveStreams();
+			const stream = streams.find(s => s.videoId === videoId);
 			if (stream) {
 				console.log(`[YouTube] Stream already active, redirecting to ${stream.url}`);
-				streamlink.trackClientConnect(streamKey);
+				ytdlp.trackClientConnect(videoId);
 				return res.redirect(302, stream.url);
 			}
 		}
 
 		// Check if we have room for another stream
-		const activeStreams = streamlink.getActiveStreams();
+		const activeStreams = ytdlp.getActiveStreams();
 		const maxStreams = config.server.streamPortEnd - config.server.streamPortStart + 1;
 
 		if (activeStreams.length >= maxStreams) {
-			const oldestWithoutClients = streamlink.getOldestStreamWithoutClients();
+			const oldestWithoutClients = ytdlp.getOldestStreamWithoutClients();
 			if (oldestWithoutClients) {
 				console.log(`[YouTube] Max streams reached, stopping oldest without clients: ${oldestWithoutClients}`);
-				streamlink.stopStream(oldestWithoutClients);
-			} else {
+				ytdlp.stopStream(oldestWithoutClients);
+			} else if (activeStreams.length > 0) {
 				const oldest = activeStreams.sort((a, b) => a.startedAt - b.startedAt)[0];
-				console.log(`[YouTube] Max streams reached, stopping oldest stream: ${oldest.channel}`);
-				streamlink.stopStream(oldest.channel);
+				console.log(`[YouTube] Max streams reached, stopping oldest stream: ${oldest.videoId}`);
+				ytdlp.stopStream(oldest.videoId);
 			}
 			await new Promise(resolve => setTimeout(resolve, 500));
 		}
 
-		// Start the stream using the video URL
-		console.log(`[YouTube] Starting stream for ${videoId}...`);
-		const result = await streamlink.startStream(streamKey, quality, videoUrl);
+		// Start the stream using yt-dlp
+		console.log(`[YouTube] Starting stream for ${videoId} using yt-dlp...`);
+		const result = await ytdlp.startStream(videoId, quality);
 
 		if (result.success) {
 			console.log(`[YouTube] Stream started, redirecting to ${result.url}`);
-			streamlink.trackClientConnect(streamKey);
+			ytdlp.trackClientConnect(videoId);
 			return res.redirect(302, result.url);
 		} else {
 			console.error(`[YouTube] Failed to start stream: ${result.error}`);
@@ -901,6 +1312,7 @@ server.listen(PORT, HOST, () => {
 process.on("SIGTERM", () => {
 	console.log("SIGTERM received, shutting down gracefully...");
 	streamlink.stopAll();
+	ytdlp.stopAll();
 	server.close(() => {
 		console.log("Server closed");
 		process.exit(0);
@@ -910,6 +1322,7 @@ process.on("SIGTERM", () => {
 process.on("SIGINT", () => {
 	console.log("\nSIGINT received, shutting down gracefully...");
 	streamlink.stopAll();
+	ytdlp.stopAll();
 	server.close(() => {
 		console.log("Server closed");
 		process.exit(0);

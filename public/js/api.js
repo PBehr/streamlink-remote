@@ -125,6 +125,24 @@ class API {
 		return this.request(`/api/favorites/${encodeURIComponent(channel)}`);
 	}
 
+	// Twitch VODs
+	async getVods(userId = null, limit = 25, type = "archive") {
+		let url = `/api/vods?limit=${limit}&type=${type}`;
+		if (userId) {
+			url += `&user_id=${userId}`;
+		}
+		return this.request(url);
+	}
+
+	// Twitch Clips
+	async getClips(broadcasterId = null, limit = 25, period = "week") {
+		let url = `/api/clips?limit=${limit}&period=${period}`;
+		if (broadcasterId) {
+			url += `&broadcaster_id=${broadcasterId}`;
+		}
+		return this.request(url);
+	}
+
 	// YouTube
 	async getYoutubeChannels() {
 		return this.request("/api/youtube/channels");
