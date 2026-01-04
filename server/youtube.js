@@ -144,6 +144,34 @@ class YouTubeService {
 	}
 
 	/**
+	 * Check if a video is a YouTube Short by checking aspect ratio via oEmbed
+	 * Shorts have portrait orientation (height > width), regular videos are landscape
+	 */
+	async isShort(videoId) {
+		try {
+			const response = await fetch(
+				`https://www.youtube.com/oembed?url=https://www.youtube.com/shorts/${videoId}&format=json`,
+				{
+					headers: {
+						"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+					}
+				}
+			);
+
+			if (response.status !== 200) {
+				return false;
+			}
+
+			const data = await response.json();
+			// Shorts return portrait dimensions (height > width) when queried with /shorts/ URL
+			// Regular videos return landscape dimensions (width > height)
+			return data.height > data.width;
+		} catch (error) {
+			return false;
+		}
+	}
+
+	/**
 	 * Fetch and parse RSS feed for a channel
 	 */
 	async fetchChannelVideos(channelId) {
@@ -167,7 +195,7 @@ class YouTubeService {
 				return [];
 			}
 
-			return result.feed.entry.map((entry) => ({
+			const videos = result.feed.entry.map((entry) => ({
 				videoId: entry["yt:videoId"][0],
 				title: entry.title[0],
 				channelId: entry["yt:channelId"][0],
@@ -176,8 +204,20 @@ class YouTubeService {
 				updated: new Date(entry.updated[0]),
 				url: entry.link[0].$.href,
 				thumbnail: `https://i.ytimg.com/vi/${entry["yt:videoId"][0]}/mqdefault.jpg`,
-				description: entry["media:group"]?.[0]?.["media:description"]?.[0] || ""
+				description: entry["media:group"]?.[0]?.["media:description"]?.[0] || "",
+				isShort: false // Will be detected separately
 			}));
+
+			// Check which videos are Shorts (in parallel, max 5 at a time)
+			const batchSize = 5;
+			for (let i = 0; i < videos.length; i += batchSize) {
+				const batch = videos.slice(i, i + batchSize);
+				await Promise.all(batch.map(async (video) => {
+					video.isShort = await this.isShort(video.videoId);
+				}));
+			}
+
+			return videos;
 		} catch (error) {
 			console.error(`Error fetching videos for channel ${channelId}:`, error.message);
 			return [];

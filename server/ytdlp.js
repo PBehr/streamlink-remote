@@ -363,24 +363,24 @@ class YtDlpManager extends EventEmitter {
 	async getDirectUrl(videoId, quality = null) {
 		const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
-		// Prefer HLS streams which have combined video+audio at higher resolutions
-		// Format 96=1080p, 95=720p, 94=480p, 93=360p (all HLS with audio)
+		// Prefer HLS streams which have combined video+audio
+		// Format IDs: 301=1080p60, 300=720p60, 94=480p, 93=360p, 92=240p, 91=144p (all HLS with audio)
 		// Then fallback to mp4 combined: 22=720p, 18=360p
 		let formatSelector;
 		if (quality === "best" || quality === null) {
-			// Prefer highest quality: 1080p HLS > 720p HLS > 720p mp4 > 480p HLS > 360p
-			formatSelector = "96/95/22/94/93/18/best[vcodec!=none][acodec!=none]/best";
+			// Prefer highest quality HLS, then fallback to mp4
+			formatSelector = "301/300/94/93/22/92/91/18/best[vcodec!=none][acodec!=none]/best";
 		} else {
 			// Try to match requested quality
 			const height = parseInt(quality.replace('p', ''));
 			if (height >= 1080) {
-				formatSelector = "96/95/22/94/93/18/best";
+				formatSelector = "301/300/94/93/22/18/best";
 			} else if (height >= 720) {
-				formatSelector = "95/22/94/93/18/best";
+				formatSelector = "300/94/93/22/18/best";
 			} else if (height >= 480) {
-				formatSelector = "94/93/18/best";
+				formatSelector = "94/93/22/18/best";
 			} else {
-				formatSelector = "93/18/best";
+				formatSelector = "93/92/91/18/best";
 			}
 		}
 

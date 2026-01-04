@@ -1331,6 +1331,935 @@ app.get("/youtube/:videoId", async (req, res) => {
 	}
 });
 
+// ============================================================================
+// XTREAM CODES API - Compatible with Xtream Codes player API
+// ============================================================================
+
+// Default credentials (can be anything, we don't enforce auth)
+const XTREAM_USER = "user";
+const XTREAM_PASS = "pass";
+
+// Helper to get server info for Xtream API responses
+function getXtreamServerInfo() {
+	const streamHost = process.env.EXTERNAL_HOST ||
+	                   (config.server.host === "0.0.0.0" ? streamlink.getLocalIpAddress() : config.server.host);
+	const streamPort = config.server.port;
+	return {
+		url: streamHost,
+		port: String(streamPort),
+		https_port: String(streamPort),
+		server_protocol: "http",
+		rtmp_port: "1935",
+		timezone: "Europe/Berlin",
+		timestamp_now: Math.floor(Date.now() / 1000),
+		time_now: new Date().toISOString().replace('T', ' ').substring(0, 19),
+		// EPG URL for IPTV players
+		epg_url: `http://${streamHost}:${streamPort}/xmltv.php`
+	};
+}
+
+// Helper to get user info for Xtream API responses
+function getXtreamUserInfo() {
+	return {
+		username: XTREAM_USER,
+		password: XTREAM_PASS,
+		message: "Welcome to Streamlink Remote",
+		auth: 1,
+		status: "Active",
+		exp_date: "9999999999",
+		is_trial: "0",
+		active_cons: "0",
+		created_at: "1704067200",
+		max_connections: "10",
+		allowed_output_formats: ["m3u8", "ts", "rtmp"]
+	};
+}
+
+// Category IDs
+const CATEGORY_LIVE_FAVORITES = "1";
+// Game categories use "game_{game_id}" format (e.g. "game_12345")
+const CATEGORY_VOD_FAVORITES = "10";
+const CATEGORY_VOD_ALL = "11";
+const CATEGORY_YOUTUBE = "20";
+const CATEGORY_YOUTUBE_SHORTS = "21";
+const CATEGORY_CLIPS_FAVORITES = "30";
+const CATEGORY_CLIPS_ALL = "31";
+
+// Cache for VOD/YouTube manifest URLs (expires after 5 minutes)
+const vodUrlCache = new Map();
+const VOD_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+function getCachedVodUrl(videoId) {
+	const cached = vodUrlCache.get(videoId);
+	if (cached && Date.now() - cached.timestamp < VOD_CACHE_TTL) {
+		console.log(`[Xtream] Cache hit for: ${videoId}`);
+		return cached.url;
+	}
+	return null;
+}
+
+function setCachedVodUrl(videoId, url) {
+	vodUrlCache.set(videoId, { url, timestamp: Date.now() });
+	// Clean up old entries
+	for (const [key, value] of vodUrlCache) {
+		if (Date.now() - value.timestamp > VOD_CACHE_TTL) {
+			vodUrlCache.delete(key);
+		}
+	}
+}
+
+// Main Xtream API endpoint: /player_api.php
+app.get("/player_api.php", async (req, res) => {
+	const { username, password, action } = req.query;
+
+	// Basic validation (we accept any credentials)
+	if (!username || !password) {
+		return res.status(401).json({ error: "Missing credentials" });
+	}
+
+	console.log(`[Xtream] Action: ${action || 'auth'}, User: ${username}`);
+
+	try {
+		// No action = authentication request
+		if (!action) {
+			return res.json({
+				user_info: getXtreamUserInfo(),
+				server_info: getXtreamServerInfo()
+			});
+		}
+
+		switch (action) {
+			case "get_live_categories":
+				return res.json(await getXtreamLiveCategories());
+
+			case "get_live_streams":
+				const liveCatId = req.query.category_id || null;
+				return res.json(await getXtreamLiveStreams(liveCatId));
+
+			case "get_vod_categories":
+				return res.json(await getXtreamVodCategories());
+
+			case "get_vod_streams":
+				const vodCatId = req.query.category_id || null;
+				return res.json(await getXtreamVodStreams(vodCatId));
+
+			case "get_vod_info":
+				const vodId = req.query.vod_id;
+				return res.json(await getXtreamVodInfo(vodId));
+
+			case "get_series_categories":
+				// Return empty - no series support to speed up sync
+				return res.json([]);
+
+			case "get_series":
+				// Return empty - no series support
+				return res.json([]);
+
+			case "get_series_info":
+				// Return empty - no series support
+				return res.json({});
+
+			case "get_short_epg":
+				const streamId = req.query.stream_id;
+				return res.json(await getXtreamShortEpg(streamId));
+
+			case "get_simple_data_table":
+				return res.json([]);
+
+			default:
+				console.log(`[Xtream] Unknown action: ${action}`);
+				return res.json([]);
+		}
+	} catch (error) {
+		console.error(`[Xtream] Error:`, error);
+		return res.status(500).json({ error: error.message });
+	}
+});
+
+// XMLTV EPG endpoint - Xtream Codes compatible
+// UHF and other IPTV players request this for EPG data
+app.get("/xmltv.php", async (req, res) => {
+	console.log(`[Xtream] XMLTV EPG request`);
+
+	try {
+		const xml = await generateXmltvEpg();
+		res.setHeader('Content-Type', 'application/xml');
+		res.send(xml);
+	} catch (error) {
+		console.error(`[Xtream] XMLTV error:`, error);
+		res.setHeader('Content-Type', 'application/xml');
+		res.send('<?xml version="1.0" encoding="UTF-8"?><tv></tv>');
+	}
+});
+
+// Alternative EPG URL formats that some players use
+app.get("/epg", async (req, res) => {
+	res.redirect('/xmltv.php');
+});
+
+app.get("/epg.xml", async (req, res) => {
+	res.redirect('/xmltv.php');
+});
+
+// Xtream VOD URL format: /movie/{username}/{password}/{stream_id}.{ext}
+// This is the standard Xtream format that IPTV clients use
+app.get("/movie/:username/:password/:streamId", async (req, res) => {
+	const { streamId } = req.params;
+	const videoId = streamId.replace(/\.(ts|m3u8|mp4|mkv)$/, "");
+	console.log(`[Xtream] Movie request: ${videoId}`);
+
+	// VOD request (Twitch)
+	if (videoId.startsWith("vod_")) {
+		const twitchId = videoId.replace("vod_", "");
+		try {
+			let manifestUrl = getCachedVodUrl(`vod_${twitchId}`);
+			if (!manifestUrl) {
+				const result = await ytdlp.getTwitchVodDirectUrl(twitchId);
+				if (result.success && result.directUrl) {
+					manifestUrl = result.directUrl;
+					setCachedVodUrl(`vod_${twitchId}`, manifestUrl);
+				}
+			}
+			if (manifestUrl) {
+				return proxyHlsManifest(res, manifestUrl);
+			}
+			return res.status(503).send("VOD unavailable");
+		} catch (error) {
+			return res.status(503).send(`VOD error: ${error.message}`);
+		}
+	}
+
+	// YouTube request
+	if (videoId.startsWith("yt_")) {
+		const ytId = videoId.replace("yt_", "");
+		try {
+			let manifestUrl = getCachedVodUrl(`yt_${ytId}`);
+			if (!manifestUrl) {
+				const result = await ytdlp.getDirectUrl(ytId);
+				if (result.success && result.directUrl) {
+					manifestUrl = result.directUrl;
+					setCachedVodUrl(`yt_${ytId}`, manifestUrl);
+				}
+			}
+			if (manifestUrl) {
+				return proxyHlsManifest(res, manifestUrl);
+			}
+			return res.status(503).send("YouTube unavailable");
+		} catch (error) {
+			return res.status(503).send(`YouTube error: ${error.message}`);
+		}
+	}
+
+	// Clip request (Twitch)
+	if (videoId.startsWith("clip_")) {
+		const clipId = videoId.replace("clip_", "");
+		console.log(`[Xtream] Clip request: ${clipId}`);
+		try {
+			let clipUrl = getCachedVodUrl(`clip_${clipId}`);
+			if (!clipUrl) {
+				const result = await ytdlp.getTwitchClipDirectUrl(clipId);
+				if (result.success && result.directUrl) {
+					clipUrl = result.directUrl;
+					setCachedVodUrl(`clip_${clipId}`, clipUrl);
+				}
+			}
+			if (clipUrl) {
+				// Clips are direct MP4 files - redirect to them
+				return res.redirect(302, clipUrl);
+			}
+			return res.status(503).send("Clip unavailable");
+		} catch (error) {
+			return res.status(503).send(`Clip error: ${error.message}`);
+		}
+	}
+
+	return res.status(404).send("Unknown VOD type");
+});
+
+// Cache for user_id -> channel_login mapping (populated from live streams)
+const userIdToChannelMap = new Map();
+
+// Xtream Live stream URL format: /live/{username}/{password}/{stream_id}.{ext}
+// This is the standard Xtream format that IPTV clients use for live streams
+app.get("/live/:username/:password/:streamId", async (req, res) => {
+	const { streamId } = req.params;
+	let channel = streamId.replace(/\.(ts|m3u8)$/, "");
+
+	// Check if this is a numeric user_id (from Xtream API) and resolve to channel name
+	if (/^\d+$/.test(channel)) {
+		const mappedChannel = userIdToChannelMap.get(channel);
+		if (mappedChannel) {
+			channel = mappedChannel;
+		} else {
+			// Try to refresh the mapping from live streams
+			try {
+				const liveStreams = await twitchAPI.getLiveStreams();
+				for (const stream of liveStreams) {
+					userIdToChannelMap.set(stream.user_id, stream.user_login);
+				}
+				const refreshedChannel = userIdToChannelMap.get(streamId.replace(/\.(ts|m3u8)$/, ""));
+				if (refreshedChannel) {
+					channel = refreshedChannel;
+				}
+			} catch (e) {
+				console.error(`[Xtream] Failed to resolve user_id ${channel}:`, e.message);
+			}
+		}
+	}
+
+	console.log(`[Xtream] Live stream request (via /live): ${channel}`);
+
+	try {
+		// Check if stream is already running
+		if (streamlink.isStreamActive(channel)) {
+			const streams = streamlink.getActiveStreams();
+			const stream = streams.find(s => s.channel.toLowerCase() === channel.toLowerCase());
+			if (stream) {
+				streamlink.trackClientConnect(channel);
+				// Pipe the TS stream directly to client
+				return proxyTsStream(res, stream.url);
+			}
+		}
+
+		// Start the stream
+		const result = await streamlink.startStream(channel);
+		if (result.success) {
+			streamlink.trackClientConnect(channel);
+			// Pipe the TS stream directly to client
+			return proxyTsStream(res, result.url);
+		}
+		return res.status(503).send(`Stream unavailable: ${result.error}`);
+	} catch (error) {
+		return res.status(503).send(`Stream error: ${error.message}`);
+	}
+});
+
+// Helper function to proxy TS stream
+async function proxyTsStream(res, streamUrl) {
+	try {
+		const response = await fetch(streamUrl);
+		if (!response.ok) {
+			return res.status(502).send("Failed to fetch stream");
+		}
+
+		res.setHeader('Content-Type', 'video/mp2t');
+		res.setHeader('Access-Control-Allow-Origin', '*');
+		res.setHeader('Cache-Control', 'no-cache');
+
+		// Pipe the stream directly
+		const reader = response.body.getReader();
+		const pump = async () => {
+			while (true) {
+				const { done, value } = await reader.read();
+				if (done) break;
+				if (!res.writableEnded) {
+					res.write(Buffer.from(value));
+				} else {
+					break;
+				}
+			}
+			if (!res.writableEnded) {
+				res.end();
+			}
+		};
+
+		pump().catch(err => {
+			console.error('[Xtream] Stream proxy error:', err.message);
+			if (!res.writableEnded) {
+				res.end();
+			}
+		});
+
+		// Handle client disconnect
+		res.on('close', () => {
+			reader.cancel();
+		});
+	} catch (error) {
+		console.error('[Xtream] Proxy error:', error.message);
+		res.status(502).send(`Proxy error: ${error.message}`);
+	}
+}
+
+// Xtream live stream URL format: /{username}/{password}/{stream_id}
+app.get("/:username/:password/:streamId", async (req, res) => {
+	const { streamId } = req.params;
+
+	// Check if it's a VOD request (starts with "vod_")
+	if (streamId.startsWith("vod_")) {
+		const videoId = streamId.replace("vod_", "").replace(/\.(ts|m3u8|mp4)$/, "");
+		console.log(`[Xtream] VOD stream request: ${videoId}`);
+
+		try {
+			// Check cache first
+			let manifestUrl = getCachedVodUrl(`vod_${videoId}`);
+			if (!manifestUrl) {
+				const result = await ytdlp.getTwitchVodDirectUrl(videoId);
+				if (result.success && result.directUrl) {
+					manifestUrl = result.directUrl;
+					setCachedVodUrl(`vod_${videoId}`, manifestUrl);
+				}
+			}
+			if (manifestUrl) {
+				// Twitch VODs have relative segment URLs - must proxy and rewrite
+				return proxyHlsManifest(res, manifestUrl);
+			}
+			return res.status(503).send("VOD unavailable");
+		} catch (error) {
+			return res.status(503).send(`VOD error: ${error.message}`);
+		}
+	}
+
+	// Check if it's a YouTube request (starts with "yt_")
+	if (streamId.startsWith("yt_")) {
+		const videoId = streamId.replace("yt_", "").replace(/\.(ts|m3u8|mp4)$/, "");
+		console.log(`[Xtream] YouTube stream request: ${videoId}`);
+
+		try {
+			// Check cache first
+			let manifestUrl = getCachedVodUrl(`yt_${videoId}`);
+			if (!manifestUrl) {
+				const result = await ytdlp.getDirectUrl(videoId);
+				if (result.success && result.directUrl) {
+					manifestUrl = result.directUrl;
+					setCachedVodUrl(`yt_${videoId}`, manifestUrl);
+				}
+			}
+			if (manifestUrl) {
+				// Proxy the manifest - IPTV clients don't follow redirects properly
+				return proxyHlsManifest(res, manifestUrl);
+			}
+			return res.status(503).send("YouTube unavailable");
+		} catch (error) {
+			return res.status(503).send(`YouTube error: ${error.message}`);
+		}
+	}
+
+	// Regular live stream - streamId is the channel name
+	const channel = streamId.replace(/\.(ts|m3u8)$/, "");
+	console.log(`[Xtream] Live stream request: ${channel}`);
+
+	try {
+		// Check if stream is already running
+		if (streamlink.isStreamActive(channel)) {
+			const streams = streamlink.getActiveStreams();
+			const stream = streams.find(s => s.channel.toLowerCase() === channel.toLowerCase());
+			if (stream) {
+				streamlink.trackClientConnect(channel);
+				return res.redirect(302, stream.url);
+			}
+		}
+
+		// Start the stream
+		const result = await streamlink.startStream(channel);
+		if (result.success) {
+			streamlink.trackClientConnect(channel);
+			return res.redirect(302, result.url);
+		}
+		return res.status(503).send(`Stream unavailable: ${result.error}`);
+	} catch (error) {
+		return res.status(503).send(`Stream error: ${error.message}`);
+	}
+});
+
+// Helper function to proxy HLS manifest and rewrite relative URLs to absolute
+async function proxyHlsManifest(res, manifestUrl) {
+	try {
+		const response = await fetch(manifestUrl);
+		if (!response.ok) {
+			return res.status(502).send("Failed to fetch manifest");
+		}
+
+		const contentType = response.headers.get('content-type') || 'application/vnd.apple.mpegurl';
+		let content = await response.text();
+
+		// Get base URL for relative paths
+		const baseUrl = manifestUrl.substring(0, manifestUrl.lastIndexOf('/') + 1);
+
+		// Rewrite relative URLs to absolute URLs
+		// Match lines that are segment files (.ts) or other manifests (.m3u8) without http
+		content = content.split('\n').map(line => {
+			const trimmed = line.trim();
+			// Skip empty lines, comments (#), and already absolute URLs
+			if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('http')) {
+				return line;
+			}
+			// This is a relative URL - make it absolute
+			return baseUrl + trimmed;
+		}).join('\n');
+
+		res.setHeader('Content-Type', contentType);
+		res.setHeader('Access-Control-Allow-Origin', '*');
+		res.setHeader('Cache-Control', 'no-cache');
+		res.send(content);
+	} catch (error) {
+		console.error('[Xtream] Proxy error:', error.message);
+		res.status(502).send(`Proxy error: ${error.message}`);
+	}
+}
+
+// ============================================================================
+// Xtream API Helper Functions
+// ============================================================================
+
+async function getXtreamLiveCategories() {
+	const categories = [
+		{ category_id: CATEGORY_LIVE_FAVORITES, category_name: "⭐ Favorites", parent_id: 0 }
+	];
+
+	// Get live streams to extract unique game categories
+	if (twitchAPI.isAuthenticated()) {
+		const liveStreams = await twitchAPI.getLiveStreams();
+		const gameCategories = new Map();
+
+		for (const stream of liveStreams) {
+			const gameId = stream.game_id || "0";
+			const gameName = stream.game_name || "Just Chatting";
+
+			if (!gameCategories.has(gameId)) {
+				gameCategories.set(gameId, gameName);
+			}
+		}
+
+		// Add game categories (use game_id + 100 as category_id to avoid conflicts)
+		for (const [gameId, gameName] of gameCategories) {
+			categories.push({
+				category_id: `game_${gameId}`,
+				category_name: `🎮 ${gameName}`,
+				parent_id: 0
+			});
+		}
+	}
+
+	return categories;
+}
+
+async function getXtreamLiveStreams(categoryId = null) {
+	if (!twitchAPI.isAuthenticated()) {
+		return [];
+	}
+
+	const streamHost = process.env.EXTERNAL_HOST ||
+	                   (config.server.host === "0.0.0.0" ? streamlink.getLocalIpAddress() : config.server.host);
+	const streamPort = config.server.port;
+
+	const streams = [];
+
+	// Get favorites
+	const favorites = db.getFavorites();
+	const favoriteLogins = new Set(favorites.map(f => f.channel_login.toLowerCase()));
+
+	// Get live streams
+	const liveStreams = await twitchAPI.getLiveStreams();
+
+	for (const stream of liveStreams) {
+		const isFavorite = favoriteLogins.has(stream.user_login.toLowerCase());
+		const gameId = stream.game_id || "0";
+		const gameCategoryId = `game_${gameId}`;
+
+		// Filter by category if specified
+		if (categoryId === CATEGORY_LIVE_FAVORITES && !isFavorite) continue;
+		// Filter by game category (e.g. "game_12345")
+		if (categoryId && categoryId.startsWith("game_") && categoryId !== gameCategoryId) continue;
+		// When categoryId is null, include all streams
+
+		const channelName = stream.user_login;
+		const twitchUserId = stream.user_id; // Numeric Twitch user ID for EPG matching
+		const displayName = stream.user_name || channelName;
+		const gameName = stream.game_name || "Just Chatting";
+		const streamTitle = stream.title || "";
+		const viewerCount = stream.viewer_count || 0;
+
+		let logoUrl = stream.thumbnail_url || "";
+		if (logoUrl) {
+			logoUrl = logoUrl.replace('{width}', '440').replace('{height}', '248');
+		}
+
+		// Determine category_id for the stream:
+		// - If favorite, show in Favorites category
+		// - Otherwise, show in the game category
+		const streamCategoryId = isFavorite ? CATEGORY_LIVE_FAVORITES : gameCategoryId;
+
+		streams.push({
+			num: streams.length + 1,
+			name: `${displayName} - ${gameName}`,
+			stream_type: "live",
+			stream_id: twitchUserId, // Use numeric Twitch user_id
+			stream_icon: logoUrl,
+			epg_channel_id: twitchUserId, // Must match XMLTV channel id
+			added: Math.floor(Date.now() / 1000),
+			category_id: streamCategoryId,
+			custom_sid: channelName, // Store channel name here for URL routing
+			tv_archive: 0,
+			direct_source: `http://${streamHost}:${streamPort}/live/${XTREAM_USER}/${XTREAM_PASS}/${channelName}.ts`,
+			tv_archive_duration: 0,
+			// Extra info
+			title: streamTitle,
+			viewers: viewerCount
+		});
+	}
+
+	return streams;
+}
+
+async function getXtreamVodCategories() {
+	const categories = [
+		{ category_id: CATEGORY_VOD_FAVORITES, category_name: "⭐ Favorites VODs", parent_id: 0 },
+		{ category_id: CATEGORY_VOD_ALL, category_name: "📼 All VODs", parent_id: 0 },
+		{ category_id: CATEGORY_CLIPS_FAVORITES, category_name: "⭐ Favorites Clips", parent_id: 0 },
+		{ category_id: CATEGORY_CLIPS_ALL, category_name: "🎬 All Clips", parent_id: 0 },
+		{ category_id: CATEGORY_YOUTUBE, category_name: "▶️ YouTube", parent_id: 0 },
+		{ category_id: CATEGORY_YOUTUBE_SHORTS, category_name: "📱 YouTube Shorts", parent_id: 0 }
+	];
+	return categories;
+}
+
+async function getXtreamVodStreams(categoryId = null) {
+	if (!twitchAPI.isAuthenticated()) {
+		return [];
+	}
+
+	const streamHost = process.env.EXTERNAL_HOST ||
+	                   (config.server.host === "0.0.0.0" ? streamlink.getLocalIpAddress() : config.server.host);
+	const streamPort = config.server.port;
+
+	const vods = [];
+
+	// YouTube videos (including Shorts)
+	if (!categoryId || categoryId === CATEGORY_YOUTUBE || categoryId === CATEGORY_YOUTUBE_SHORTS) {
+		const youtubeChannels = db.getYoutubeChannels();
+		for (const channel of youtubeChannels) {
+			try {
+				const videos = await youtubeService.fetchChannelVideos(channel.channel_id);
+				// Take only the first 10 videos per channel
+				const limitedVideos = videos.slice(0, 10);
+				for (const video of limitedVideos) {
+					// Use isShort flag from YouTube service (detected via /shorts/ URL check)
+					const isShort = video.isShort || false;
+
+					// Filter by category
+					if (categoryId === CATEGORY_YOUTUBE && isShort) continue;
+					if (categoryId === CATEGORY_YOUTUBE_SHORTS && !isShort) continue;
+
+					vods.push({
+						num: vods.length + 1,
+						name: `${channel.channel_name} - ${video.title}`,
+						stream_type: "movie",
+						stream_id: `yt_${video.videoId}`,
+						stream_icon: video.thumbnail,
+						rating: "",
+						rating_5based: 0,
+						added: Math.floor(new Date(video.published).getTime() / 1000),
+						category_id: isShort ? CATEGORY_YOUTUBE_SHORTS : CATEGORY_YOUTUBE,
+						container_extension: "m3u8",
+						custom_sid: "",
+						direct_source: `http://${streamHost}:${streamPort}/${XTREAM_USER}/${XTREAM_PASS}/yt_${video.videoId}`
+					});
+				}
+			} catch (e) {
+				// Skip channels with errors
+				console.error(`[Xtream] Error fetching YouTube videos for ${channel.channel_name}:`, e.message);
+			}
+		}
+	}
+
+	// Twitch VODs
+	if (!categoryId || categoryId === CATEGORY_VOD_FAVORITES || categoryId === CATEGORY_VOD_ALL) {
+		const favorites = db.getFavorites();
+		const favoriteLogins = new Set(favorites.map(f => f.channel_login.toLowerCase()));
+		const followedChannels = await twitchAPI.getFollowedChannels();
+
+		for (const channel of followedChannels) {
+			const isFavorite = favoriteLogins.has(channel.broadcaster_login.toLowerCase());
+
+			// Filter by category - only filter if a specific category is requested
+			if (categoryId === CATEGORY_VOD_FAVORITES && !isFavorite) continue;
+			if (categoryId === CATEGORY_VOD_ALL && isFavorite) continue;
+			// When categoryId is null, include all VODs (both favorites and non-favorites)
+
+			try {
+				const videos = await twitchAPI.getVideos(channel.broadcaster_id, 5, "archive");
+				for (const video of videos) {
+					// Parse duration
+					let durationSecs = 0;
+					if (video.duration) {
+						const match = video.duration.match(/(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/);
+						if (match) {
+							durationSecs = (parseInt(match[1]) || 0) * 3600 +
+							               (parseInt(match[2]) || 0) * 60 +
+							               (parseInt(match[3]) || 0);
+						}
+					}
+
+					const thumbnail = video.thumbnail_url
+						? video.thumbnail_url.replace('%{width}', '320').replace('%{height}', '180')
+						: '';
+
+					vods.push({
+						num: vods.length + 1,
+						name: `${channel.broadcaster_name} - ${video.title}`,
+						stream_type: "movie",
+						stream_id: `vod_${video.id}`,
+						stream_icon: thumbnail,
+						rating: "",
+						rating_5based: 0,
+						added: Math.floor(new Date(video.created_at).getTime() / 1000),
+						category_id: isFavorite ? CATEGORY_VOD_FAVORITES : CATEGORY_VOD_ALL,
+						container_extension: "m3u8",
+						custom_sid: "",
+						direct_source: `http://${streamHost}:${streamPort}/${XTREAM_USER}/${XTREAM_PASS}/vod_${video.id}`,
+						// Extra VOD info
+						duration: durationSecs,
+						duration_secs: durationSecs,
+						bitrate: 0
+					});
+				}
+			} catch (e) {
+				// Skip channels with no VODs
+			}
+		}
+	}
+
+	// Twitch Clips
+	if (!categoryId || categoryId === CATEGORY_CLIPS_FAVORITES || categoryId === CATEGORY_CLIPS_ALL) {
+		const favorites = db.getFavorites();
+		const favoriteLogins = new Set(favorites.map(f => f.channel_login.toLowerCase()));
+		const followedChannels = await twitchAPI.getFollowedChannels();
+
+		const clipsList = []; // Collect clips separately for sorting
+
+		for (const channel of followedChannels) {
+			const isFavorite = favoriteLogins.has(channel.broadcaster_login.toLowerCase());
+
+			// Filter by category
+			if (categoryId === CATEGORY_CLIPS_FAVORITES && !isFavorite) continue;
+			if (categoryId === CATEGORY_CLIPS_ALL && isFavorite) continue;
+
+			try {
+				// Get more clips (30 days) to have better selection for sorting by date
+				const clips = await twitchAPI.getClips(channel.broadcaster_id, 10, "month");
+				for (const clip of clips) {
+					clipsList.push({
+						clip,
+						channel,
+						isFavorite
+					});
+				}
+			} catch (e) {
+				// Skip channels with no clips
+			}
+		}
+
+		// Sort clips by created_at (newest first) and take top results
+		clipsList.sort((a, b) => new Date(b.clip.created_at) - new Date(a.clip.created_at));
+		const topClips = clipsList.slice(0, 150); // Limit to 150 newest clips
+
+		for (const { clip, channel, isFavorite } of topClips) {
+			vods.push({
+				num: vods.length + 1,
+				name: `${channel.broadcaster_name} - ${clip.title}`,
+				stream_type: "movie",
+				stream_id: `clip_${clip.id}`,
+				stream_icon: clip.thumbnail_url || '',
+				rating: "",
+				rating_5based: 0,
+				added: Math.floor(new Date(clip.created_at).getTime() / 1000),
+				category_id: isFavorite ? CATEGORY_CLIPS_FAVORITES : CATEGORY_CLIPS_ALL,
+				container_extension: "mp4",
+				custom_sid: "",
+				direct_source: `http://${streamHost}:${streamPort}/movie/${XTREAM_USER}/${XTREAM_PASS}/clip_${clip.id}.mp4`,
+				// Extra clip info
+				duration: clip.duration || 0,
+				duration_secs: clip.duration || 0,
+				bitrate: 0
+			});
+		}
+	}
+
+	return vods;
+}
+
+async function getXtreamVodInfo(vodId) {
+	if (!vodId) return {};
+
+	const streamHost = process.env.EXTERNAL_HOST ||
+	                   (config.server.host === "0.0.0.0" ? streamlink.getLocalIpAddress() : config.server.host);
+	const streamPort = config.server.port;
+
+	// YouTube video
+	if (vodId.startsWith("yt_")) {
+		const videoId = vodId.replace("yt_", "");
+		return {
+			info: {
+				name: `YouTube Video ${videoId}`,
+				description: "",
+				category_id: CATEGORY_YOUTUBE,
+				stream_type: "movie"
+			},
+			movie_data: {
+				stream_id: vodId,
+				container_extension: "m3u8",
+				direct_source: `http://${streamHost}:${streamPort}/${XTREAM_USER}/${XTREAM_PASS}/${vodId}`
+			}
+		};
+	}
+
+	// Twitch VOD
+	if (vodId.startsWith("vod_")) {
+		const videoId = vodId.replace("vod_", "");
+		return {
+			info: {
+				name: `Twitch VOD ${videoId}`,
+				description: "",
+				category_id: CATEGORY_VOD_FAVORITES,
+				stream_type: "movie"
+			},
+			movie_data: {
+				stream_id: vodId,
+				container_extension: "m3u8",
+				direct_source: `http://${streamHost}:${streamPort}/${XTREAM_USER}/${XTREAM_PASS}/${vodId}`
+			}
+		};
+	}
+
+	return {};
+}
+
+// Series functions removed - returning empty in switch/case to speed up sync
+
+async function getXtreamShortEpg(streamId) {
+	if (!streamId || !twitchAPI.isAuthenticated()) {
+		return { epg_listings: [] };
+	}
+
+	try {
+		// Get channel info to fetch current stream title
+		const channelInfo = await twitchAPI.getChannel(streamId);
+
+		if (channelInfo && channelInfo.stream) {
+			const stream = channelInfo.stream;
+			const now = Math.floor(Date.now() / 1000);
+			const startTime = new Date(stream.started_at).getTime() / 1000;
+			// Assume stream runs for 8 hours from start
+			const endTime = startTime + (8 * 60 * 60);
+
+			return {
+				epg_listings: [{
+					id: `epg_${streamId}_${now}`,
+					epg_id: streamId,
+					title: stream.title || "Live Stream",
+					lang: "de",
+					start: new Date(startTime * 1000).toISOString().replace('T', ' ').substring(0, 19),
+					end: new Date(endTime * 1000).toISOString().replace('T', ' ').substring(0, 19),
+					description: `🎮 ${stream.game_name || "Just Chatting"}\n👥 ${stream.viewer_count || 0} viewers`,
+					channel_id: streamId,
+					start_timestamp: startTime,
+					stop_timestamp: endTime,
+					now_playing: 1,
+					has_archive: 0
+				}]
+			};
+		}
+
+		return { epg_listings: [] };
+	} catch (error) {
+		console.error(`[Xtream] EPG error for ${streamId}:`, error.message);
+		return { epg_listings: [] };
+	}
+}
+
+/**
+ * Generate XMLTV format EPG for all live streams
+ * This is the standard format that IPTV players like UHF expect
+ */
+async function generateXmltvEpg() {
+	const lines = ['<?xml version="1.0" encoding="UTF-8"?>'];
+	lines.push('<tv generator-info-name="Streamlink Remote" generator-info-url="http://localhost">');
+
+	if (!twitchAPI.isAuthenticated()) {
+		lines.push('</tv>');
+		return lines.join('\n');
+	}
+
+	try {
+		const liveStreams = await twitchAPI.getLiveStreams();
+
+		// Generate channel definitions - use numeric user_id to match epg_channel_id in streams
+		for (const stream of liveStreams) {
+			const channelId = stream.user_id; // Numeric Twitch user ID
+			const displayName = escapeXml(stream.user_name || stream.user_login);
+			let iconUrl = stream.thumbnail_url || "";
+			if (iconUrl) {
+				iconUrl = iconUrl.replace('{width}', '70').replace('{height}', '70');
+			}
+
+			lines.push(`  <channel id="${channelId}">`);
+			lines.push(`    <display-name>${displayName}</display-name>`);
+			if (iconUrl) {
+				lines.push(`    <icon src="${escapeXml(iconUrl)}" />`);
+			}
+			lines.push(`  </channel>`);
+		}
+
+		// Generate programme entries
+		for (const stream of liveStreams) {
+			const channelId = stream.user_id; // Numeric Twitch user ID
+			const title = escapeXml(stream.title || "Live Stream");
+			const gameName = escapeXml(stream.game_name || "Just Chatting");
+			const viewerCount = stream.viewer_count || 0;
+
+			// Parse start time
+			const startTime = new Date(stream.started_at);
+			// Assume 8 hours duration
+			const endTime = new Date(startTime.getTime() + 8 * 60 * 60 * 1000);
+
+			const startStr = formatXmltvDate(startTime);
+			const endStr = formatXmltvDate(endTime);
+
+			lines.push(`  <programme start="${startStr}" stop="${endStr}" channel="${channelId}">`);
+			lines.push(`    <title lang="de">${title}</title>`);
+			lines.push(`    <desc lang="de">🎮 ${gameName} | 👥 ${viewerCount} viewers</desc>`);
+			lines.push(`    <category lang="de">${gameName}</category>`);
+			lines.push(`  </programme>`);
+		}
+
+		lines.push('</tv>');
+		return lines.join('\n');
+	} catch (error) {
+		console.error('[Xtream] Error generating XMLTV:', error.message);
+		lines.push('</tv>');
+		return lines.join('\n');
+	}
+}
+
+function escapeXml(str) {
+	if (!str) return '';
+	return str
+		.replace(/&/g, '&amp;')
+		.replace(/</g, '&lt;')
+		.replace(/>/g, '&gt;')
+		.replace(/"/g, '&quot;')
+		.replace(/'/g, '&apos;');
+}
+
+function formatXmltvDate(date) {
+	// Format: YYYYMMDDHHmmss +0100
+	const pad = (n) => n.toString().padStart(2, '0');
+	const year = date.getFullYear();
+	const month = pad(date.getMonth() + 1);
+	const day = pad(date.getDate());
+	const hours = pad(date.getHours());
+	const minutes = pad(date.getMinutes());
+	const seconds = pad(date.getSeconds());
+
+	// Get timezone offset
+	const tzOffset = -date.getTimezoneOffset();
+	const tzHours = pad(Math.floor(Math.abs(tzOffset) / 60));
+	const tzMins = pad(Math.abs(tzOffset) % 60);
+	const tzSign = tzOffset >= 0 ? '+' : '-';
+
+	return `${year}${month}${day}${hours}${minutes}${seconds} ${tzSign}${tzHours}${tzMins}`;
+}
+
 // Serve index.html for all other routes (SPA)
 app.get("*", (req, res) => {
 	res.sendFile(path.join(__dirname, "../public/index.html"));
