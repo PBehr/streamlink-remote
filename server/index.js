@@ -460,12 +460,37 @@ app.get("/playlist-favorites.m3u", async (req, res) => {
 			return res.send('#EXTM3U\n');
 		}
 
+		const favoriteLogins = new Set(favorites.map(f => f.channel_login.toLowerCase()));
+
 		// Get live streams and filter by favorites
 		const liveStreams = await twitchAPI.getLiveStreams();
-		const favoriteLogins = new Set(favorites.map(f => f.channel_login.toLowerCase()));
 		const liveFavorites = liveStreams.filter(s =>
 			favoriteLogins.has(s.user_login.toLowerCase())
 		);
+
+		// Get followed channels to find broadcaster IDs for VOD fetching
+		const followedChannels = await twitchAPI.getFollowedChannels();
+		const favoriteChannels = followedChannels.filter(ch =>
+			favoriteLogins.has(ch.broadcaster_login.toLowerCase())
+		);
+
+		// Fetch recent VODs for each favorite channel (limit 3 per channel)
+		const vodLimit = parseInt(req.query.vodLimit) || 3;
+		const allVideos = [];
+		for (const channel of favoriteChannels) {
+			try {
+				const videos = await twitchAPI.getVideos(channel.broadcaster_id, vodLimit, "archive");
+				allVideos.push(...videos.map(v => ({
+					...v,
+					broadcaster_name: channel.broadcaster_name,
+					broadcaster_login: channel.broadcaster_login
+				})));
+			} catch (e) {
+				// Silently skip channels with no VODs
+			}
+		}
+		// Sort VODs by date (newest first)
+		allVideos.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
 		// Build M3U playlist
 		const streamHost = process.env.EXTERNAL_HOST ||
@@ -476,6 +501,12 @@ app.get("/playlist-favorites.m3u", async (req, res) => {
 
 		let m3u = '#EXTM3U\n';
 
+		const sanitize = (str) => str
+			.replace(/"/g, "'")
+			.replace(/\n/g, ' ')
+			.replace(/\r/g, '');
+
+		// Add LIVE streams first (group: "Favorites Live")
 		for (const stream of liveFavorites) {
 			const channelName = stream.user_login;
 			const displayName = stream.user_name || channelName;
@@ -490,17 +521,38 @@ app.get("/playlist-favorites.m3u", async (req, res) => {
 					.replace('{height}', '248');
 			}
 
-			const sanitize = (str) => str
-				.replace(/"/g, "'")
-				.replace(/\n/g, ' ')
-				.replace(/\r/g, '');
-
 			const fullTitle = streamTitle
-				? sanitize(`${displayName} - ${streamTitle}`)
-				: sanitize(`${displayName} - ${gameName}`);
+				? sanitize(`🔴 ${displayName} - ${streamTitle}`)
+				: sanitize(`🔴 ${displayName} - ${gameName}`);
 
-			m3u += `#EXTINF:-1 tvg-id="${channelName}" tvg-name="${sanitize(displayName)}" tvg-logo="${logoUrl}" group-title="Favorites" tvg-chno="${viewerCount}",${fullTitle}\n`;
+			// Live streams: use tvg-id for EPG, no .mp4 extension
+			m3u += `#EXTINF:-1 tvg-id="${channelName}" tvg-name="${sanitize(displayName)}" tvg-logo="${logoUrl}" group-title="Favorites Live" tvg-chno="${viewerCount}",${fullTitle}\n`;
 			m3u += `http://${streamHost}:${streamPort}/stream/${channelName}${qualityParam}\n`;
+		}
+
+		// Add VODs (group: "Favorites VODs") - with .mp4 for UHF movie detection
+		for (const video of allVideos) {
+			const channelName = video.user_name || video.broadcaster_name || 'Unknown';
+			const fullTitle = sanitize(`${channelName} - ${video.title}`);
+			const thumbnail = video.thumbnail_url
+				? video.thumbnail_url.replace('%{width}', '320').replace('%{height}', '180')
+				: '';
+
+			// Parse duration from Twitch format
+			let durationSecs = -1;
+			if (video.duration) {
+				const match = video.duration.match(/(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?/);
+				if (match) {
+					const hours = parseInt(match[1]) || 0;
+					const mins = parseInt(match[2]) || 0;
+					const secs = parseInt(match[3]) || 0;
+					durationSecs = hours * 3600 + mins * 60 + secs;
+				}
+			}
+
+			// VODs: no tvg-id, .mp4 extension for UHF movie detection
+			m3u += `#EXTINF:${durationSecs} tvg-logo="${thumbnail}" group-title="Favorites VODs",${fullTitle}\n`;
+			m3u += `http://${streamHost}:${streamPort}/vod/${video.id}.mp4\n`;
 		}
 
 		res.setHeader('Content-Type', 'audio/x-mpegurl');
@@ -510,7 +562,7 @@ app.get("/playlist-favorites.m3u", async (req, res) => {
 		res.setHeader('Expires', '0');
 		res.send(m3u);
 
-		console.log(`[Playlist] Generated favorites M3U with ${liveFavorites.length} live streams (${favorites.length} total favorites)`);
+		console.log(`[Playlist] Generated favorites M3U with ${liveFavorites.length} live + ${allVideos.length} VODs`);
 	} catch (error) {
 		console.error("Error generating favorites playlist:", error);
 		res.status(500).send(`Error generating playlist: ${error.message}`);

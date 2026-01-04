@@ -11,7 +11,7 @@ class YtDlpManager extends EventEmitter {
 		this.portEnd = serverConfig.ytdlpPortEnd || serverConfig.streamPortEnd;
 		// Client tracking for auto-stop
 		this.clientConnections = new Map();
-		this.autoStopTimeout = 120000; // 2 minutes without clients before auto-stop
+		this.autoStopTimeout = 300000; // 5 minutes without clients before auto-stop
 		this.autoStopCheckInterval = 30000;
 		this._startAutoStopChecker();
 	}
@@ -353,8 +353,9 @@ class YtDlpManager extends EventEmitter {
 	 * This allows seeking in the player but URLs expire after a few hours
 	 *
 	 * Format selection priority:
-	 * 1. Combined video+audio mp4 (format 18, 22, etc.) - most compatible
-	 * 2. Best available format as fallback
+	 * 1. HLS streams (96=1080p, 95=720p, 94=480p, 93=360p) - combined video+audio
+	 * 2. Combined mp4 formats (22=720p, 18=360p) as fallback
+	 * 3. Best available format as last resort
 	 *
 	 * Note: Separate video+audio streams (bestvideo+bestaudio) return 2 URLs
 	 * which don't work for simple redirect-based playback
@@ -362,17 +363,25 @@ class YtDlpManager extends EventEmitter {
 	async getDirectUrl(videoId, quality = null) {
 		const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
-		// Prefer combined formats (video+audio in single file) for maximum compatibility
-		// Format 22 = 720p mp4, Format 18 = 360p mp4 - both are combined formats
-		// These work reliably with direct URL redirects in IPTV players
+		// Prefer HLS streams which have combined video+audio at higher resolutions
+		// Format 96=1080p, 95=720p, 94=480p, 93=360p (all HLS with audio)
+		// Then fallback to mp4 combined: 22=720p, 18=360p
 		let formatSelector;
 		if (quality === "best" || quality === null) {
-			// Prefer highest quality combined format, fallback to any format
-			formatSelector = "22/18/best[vcodec!=none][acodec!=none]/best";
+			// Prefer highest quality: 1080p HLS > 720p HLS > 720p mp4 > 480p HLS > 360p
+			formatSelector = "96/95/22/94/93/18/best[vcodec!=none][acodec!=none]/best";
 		} else {
-			// Try to match requested quality with combined format
-			const height = quality.replace('p', '');
-			formatSelector = `best[height<=${height}][vcodec!=none][acodec!=none]/22/18/best`;
+			// Try to match requested quality
+			const height = parseInt(quality.replace('p', ''));
+			if (height >= 1080) {
+				formatSelector = "96/95/22/94/93/18/best";
+			} else if (height >= 720) {
+				formatSelector = "95/22/94/93/18/best";
+			} else if (height >= 480) {
+				formatSelector = "94/93/18/best";
+			} else {
+				formatSelector = "93/18/best";
+			}
 		}
 
 		const args = [
