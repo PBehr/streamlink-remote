@@ -10,8 +10,8 @@ RUN apk add --no-cache \
     build-base \
     python3-dev
 
-# Install streamlink
-RUN pip3 install --break-system-packages --no-cache-dir streamlink
+# Install streamlink and yt-dlp
+RUN pip3 install --break-system-packages --no-cache-dir streamlink yt-dlp
 
 # Clone ttvlol plugin and install to user plugins directory
 RUN git clone https://github.com/2bc4/streamlink-ttvlol.git /tmp/streamlink-ttvlol \

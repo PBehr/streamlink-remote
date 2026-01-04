@@ -45,6 +45,13 @@ class DatabaseManager {
 				channel_name TEXT,
 				added_at INTEGER
 			);
+
+			CREATE TABLE IF NOT EXISTS youtube_channels (
+				channel_id TEXT PRIMARY KEY,
+				channel_name TEXT,
+				channel_url TEXT,
+				added_at INTEGER
+			);
 		`);
 
 		console.log("✓ Database initialized");
@@ -191,6 +198,30 @@ class DatabaseManager {
 	isFavorite(channelLogin) {
 		const stmt = this.db.prepare("SELECT 1 FROM favorites WHERE channel_login = ?");
 		return !!stmt.get(channelLogin.toLowerCase());
+	}
+
+	// YouTube channels methods
+	addYoutubeChannel(channelId, channelName, channelUrl) {
+		const stmt = this.db.prepare(`
+			INSERT OR REPLACE INTO youtube_channels (channel_id, channel_name, channel_url, added_at)
+			VALUES (?, ?, ?, ?)
+		`);
+		stmt.run(channelId, channelName, channelUrl, Date.now());
+	}
+
+	removeYoutubeChannel(channelId) {
+		const stmt = this.db.prepare("DELETE FROM youtube_channels WHERE channel_id = ?");
+		stmt.run(channelId);
+	}
+
+	getYoutubeChannels() {
+		const stmt = this.db.prepare("SELECT * FROM youtube_channels ORDER BY channel_name ASC");
+		return stmt.all();
+	}
+
+	getYoutubeChannel(channelId) {
+		const stmt = this.db.prepare("SELECT * FROM youtube_channels WHERE channel_id = ?");
+		return stmt.get(channelId);
 	}
 
 	close() {

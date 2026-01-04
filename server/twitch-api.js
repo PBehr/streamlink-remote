@@ -297,6 +297,155 @@ class TwitchAPI {
 			expires_at: this.auth.expires_at
 		};
 	}
+
+	/**
+	 * Get VODs (Videos) for followed channels or a specific channel
+	 * @param {string} userId - Optional: specific user ID. If not provided, gets VODs from followed channels
+	 * @param {number} limit - Number of videos to fetch per channel
+	 * @param {string} type - Video type: "archive" (past broadcasts), "highlight", "upload", or "all"
+	 */
+	async getVideos(userId = null, limit = 20, type = "archive") {
+		if (!this.isAuthenticated()) {
+			throw new Error("Not authenticated");
+		}
+
+		if (userId) {
+			// Get videos for a specific channel
+			const response = await this.makeRequest("/videos", {
+				query: {
+					user_id: userId,
+					first: limit,
+					type: type
+				}
+			});
+			return response.data || [];
+		}
+
+		// Get videos from followed channels
+		const followedChannels = await this.getFollowedChannels();
+		if (followedChannels.length === 0) {
+			return [];
+		}
+
+		// Fetch videos for each followed channel (in parallel, max 5 at a time)
+		const allVideos = [];
+		const batchSize = 5;
+
+		for (let i = 0; i < followedChannels.length; i += batchSize) {
+			const batch = followedChannels.slice(i, i + batchSize);
+			const promises = batch.map(async (channel) => {
+				try {
+					const response = await this.makeRequest("/videos", {
+						query: {
+							user_id: channel.broadcaster_id,
+							first: 5, // Get 5 recent videos per channel
+							type: type
+						}
+					});
+					return (response.data || []).map(video => ({
+						...video,
+						broadcaster_name: channel.broadcaster_name,
+						broadcaster_login: channel.broadcaster_login
+					}));
+				} catch (error) {
+					console.error(`Error fetching videos for ${channel.broadcaster_login}:`, error.message);
+					return [];
+				}
+			});
+
+			const results = await Promise.all(promises);
+			results.forEach(videos => allVideos.push(...videos));
+		}
+
+		// Sort by created_at (newest first) and limit
+		return allVideos
+			.sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+			.slice(0, limit);
+	}
+
+	/**
+	 * Get Clips for followed channels or a specific channel
+	 * @param {string} broadcasterId - Optional: specific broadcaster ID
+	 * @param {number} limit - Number of clips to fetch
+	 * @param {string} period - Time period: "day", "week", "month", "all"
+	 */
+	async getClips(broadcasterId = null, limit = 20, period = "week") {
+		if (!this.isAuthenticated()) {
+			throw new Error("Not authenticated");
+		}
+
+		// Calculate start date based on period
+		const now = new Date();
+		let startedAt;
+		switch (period) {
+			case "day":
+				startedAt = new Date(now - 24 * 60 * 60 * 1000);
+				break;
+			case "week":
+				startedAt = new Date(now - 7 * 24 * 60 * 60 * 1000);
+				break;
+			case "month":
+				startedAt = new Date(now - 30 * 24 * 60 * 60 * 1000);
+				break;
+			default:
+				startedAt = null;
+		}
+
+		if (broadcasterId) {
+			// Get clips for a specific channel
+			const query = {
+				broadcaster_id: broadcasterId,
+				first: limit
+			};
+			if (startedAt) {
+				query.started_at = startedAt.toISOString();
+				query.ended_at = now.toISOString();
+			}
+
+			const response = await this.makeRequest("/clips", { query });
+			return response.data || [];
+		}
+
+		// Get clips from followed channels
+		const followedChannels = await this.getFollowedChannels();
+		if (followedChannels.length === 0) {
+			return [];
+		}
+
+		// Fetch clips for each followed channel (in parallel, max 5 at a time)
+		const allClips = [];
+		const batchSize = 5;
+
+		for (let i = 0; i < followedChannels.length; i += batchSize) {
+			const batch = followedChannels.slice(i, i + batchSize);
+			const promises = batch.map(async (channel) => {
+				try {
+					const query = {
+						broadcaster_id: channel.broadcaster_id,
+						first: 5 // Get 5 recent clips per channel
+					};
+					if (startedAt) {
+						query.started_at = startedAt.toISOString();
+						query.ended_at = now.toISOString();
+					}
+
+					const response = await this.makeRequest("/clips", { query });
+					return response.data || [];
+				} catch (error) {
+					console.error(`Error fetching clips for ${channel.broadcaster_login}:`, error.message);
+					return [];
+				}
+			});
+
+			const results = await Promise.all(promises);
+			results.forEach(clips => allClips.push(...clips));
+		}
+
+		// Sort by view_count (most viewed first) and limit
+		return allClips
+			.sort((a, b) => b.view_count - a.view_count)
+			.slice(0, limit);
+	}
 }
 
 module.exports = TwitchAPI;

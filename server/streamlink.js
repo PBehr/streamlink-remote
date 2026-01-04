@@ -11,7 +11,7 @@ class StreamlinkManager extends EventEmitter {
 		this.nextPort = serverConfig.streamPortStart;
 		// Client tracking for auto-stop
 		this.clientConnections = new Map(); // channel -> { count: number, lastActivity: timestamp }
-		this.autoStopTimeout = 120000; // 2 minutes without clients before auto-stop
+		this.autoStopTimeout = 300000; // 5 minutes without clients before auto-stop
 		this.autoStopCheckInterval = 30000; // Check every 30 seconds
 		this._startAutoStopChecker();
 	}
@@ -126,7 +126,7 @@ class StreamlinkManager extends EventEmitter {
 		return port;
 	}
 
-	async startStream(channel, quality = null) {
+	async startStream(channel, quality = null, customUrl = null) {
 		// Check if stream already running
 		if (this.activeStreams.has(channel)) {
 			const existing = this.activeStreams.get(channel);
@@ -146,20 +146,31 @@ class StreamlinkManager extends EventEmitter {
 		                   (this.serverConfig.host === "0.0.0.0" ? this.getLocalIpAddress() : this.serverConfig.host);
 		const url = `http://${streamHost}:${port}/`;
 
+		// Determine the source URL (Twitch channel or custom URL for YouTube etc.)
+		const sourceUrl = customUrl || `twitch.tv/${channel}`;
+		const isTwitch = !customUrl && !channel.startsWith("yt:");
+
 		const args = [
-			`twitch.tv/${channel}`,
+			sourceUrl,
 			streamQuality,
 			"--player-external-http",
 			"--player-external-http-interface",
 			this.serverConfig.host,
 			"--player-external-http-port",
 			String(port),
-			"--twitch-proxy-playlist=https://eu.luminous.dev,https://lb-eu.cdn-perfprod.com",
 			"--retry-streams",
 			String(this.config.retryStreams),
 			"--retry-open",
 			String(this.config.retryOpen)
 		];
+
+		// Add Twitch-specific options only for Twitch streams
+		if (isTwitch) {
+			args.push(
+				"--twitch-disable-ads",
+				"--twitch-proxy-playlist=https://eu.luminous.dev,https://lb-eu.cdn-perfprod.com"
+			);
+		}
 
 		console.log(`Starting stream: ${channel} (${streamQuality}) on port ${port}`);
 		console.log(`Command: ${this.config.executable} ${args.join(" ")}`);

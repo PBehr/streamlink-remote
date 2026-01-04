@@ -322,26 +322,6 @@ body {
 .active-stream-actions {
 	display: flex;
 	gap: 0.5rem;
-	flex-wrap: wrap;
-}
-
-.active-stream-actions .btn {
-	display: flex;
-	align-items: center;
-	gap: 0.25rem;
-}
-
-.stream-modal-actions {
-	display: flex;
-	gap: 0.5rem;
-	margin-top: 1rem;
-	flex-wrap: wrap;
-}
-
-.stream-modal-actions .btn {
-	display: flex;
-	align-items: center;
-	gap: 0.5rem;
 }
 
 /* Search */
@@ -627,12 +607,203 @@ body {
 		min-width: 0;
 	}
 
-	.stream-modal-actions {
+	.youtube-add-channel {
 		flex-direction: column;
 	}
+}
 
-	.stream-modal-actions .btn {
-		width: 100%;
-		justify-content: center;
+/* YouTube Section */
+.youtube-channels-section {
+	margin-bottom: 2rem;
+}
+
+.youtube-add-channel {
+	display: flex;
+	gap: 0.5rem;
+	margin-bottom: 1rem;
+}
+
+.youtube-add-channel .search-input {
+	flex: 1;
+}
+
+.youtube-channels-list {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+}
+
+.youtube-channel-tag {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	background: var(--bg-card);
+	border: 1px solid var(--border);
+	border-radius: 2rem;
+	padding: 0.5rem 0.75rem;
+	font-size: 0.875rem;
+}
+
+.youtube-channel-tag .channel-name {
+	color: var(--text);
+}
+
+.youtube-channel-tag .remove-channel-btn {
+	background: transparent;
+	border: none;
+	color: var(--text-muted);
+	cursor: pointer;
+	font-size: 1.25rem;
+	line-height: 1;
+	padding: 0;
+	width: 20px;
+	height: 20px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 50%;
+	transition: all 0.2s;
+}
+
+.youtube-channel-tag .remove-channel-btn:hover {
+	background: var(--error);
+	color: white;
+}
+
+.youtube-videos-section h3 {
+	margin-bottom: 1rem;
+	color: var(--text);
+}
+
+.youtube-badge {
+	position: absolute;
+	top: 0.5rem;
+	left: 0.5rem;
+	background: #ff0000;
+	color: white;
+	padding: 0.25rem 0.5rem;
+	border-radius: 0.25rem;
+	font-size: 0.75rem;
+	font-weight: 600;
+}
+
+/* VOD and Clip badges */
+.vod-badge {
+	position: absolute;
+	top: 0.5rem;
+	left: 0.5rem;
+	background: #9146ff;
+	color: white;
+	padding: 0.25rem 0.5rem;
+	border-radius: 0.25rem;
+	font-size: 0.75rem;
+	font-weight: 600;
+}
+
+.clip-badge {
+	position: absolute;
+	top: 0.5rem;
+	left: 0.5rem;
+	background: #ff6b00;
+	color: white;
+	padding: 0.25rem 0.5rem;
+	border-radius: 0.25rem;
+	font-size: 0.75rem;
+	font-weight: 600;
+}
+
+.vod-duration,
+.clip-duration {
+	position: absolute;
+	bottom: 0.5rem;
+	right: 0.5rem;
+	background: rgba(0, 0, 0, 0.8);
+	color: white;
+	padding: 0.2rem 0.4rem;
+	border-radius: 0.25rem;
+	font-size: 0.75rem;
+	font-weight: 500;
+}
+
+/* View header with filters */
+.view-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 1rem;
+	margin-bottom: 1rem;
+}
+
+.view-filters {
+	display: flex;
+	gap: 0.5rem;
+	align-items: center;
+}
+
+.select-small {
+	padding: 0.4rem 0.75rem;
+	font-size: 0.875rem;
+}
+
+.youtube-card {
+	cursor: pointer;
+}
+
+.youtube-card:hover {
+	transform: translateY(-2px);
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* Playlist Links */
+.playlist-links {
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+}
+
+.playlist-link-item {
+	background: var(--bg-alt);
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+	padding: 0.75rem;
+}
+
+.playlist-link-info {
+	display: flex;
+	flex-direction: column;
+	gap: 0.25rem;
+	margin-bottom: 0.5rem;
+}
+
+.playlist-link-info strong {
+	color: var(--text);
+}
+
+.playlist-link-actions {
+	display: flex;
+	gap: 0.5rem;
+	align-items: center;
+}
+
+.playlist-url {
+	flex: 1;
+	background: var(--bg);
+	padding: 0.5rem;
+	border-radius: 0.25rem;
+	font-size: 0.75rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+	.playlist-link-actions {
+		flex-direction: column;
+		align-items: stretch;
+	}
+
+	.playlist-url {
+		font-size: 0.65rem;
 	}
 }

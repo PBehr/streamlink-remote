@@ -124,6 +124,72 @@ class API {
 	async isFavorite(channel) {
 		return this.request(`/api/favorites/${encodeURIComponent(channel)}`);
 	}
+
+	// Twitch VODs
+	async getVods(userId = null, limit = 25, type = "archive") {
+		let url = `/api/vods?limit=${limit}&type=${type}`;
+		if (userId) {
+			url += `&user_id=${userId}`;
+		}
+		return this.request(url);
+	}
+
+	// Twitch Clips
+	async getClips(broadcasterId = null, limit = 25, period = "week") {
+		let url = `/api/clips?limit=${limit}&period=${period}`;
+		if (broadcasterId) {
+			url += `&broadcaster_id=${broadcasterId}`;
+		}
+		return this.request(url);
+	}
+
+	// YouTube
+	async getYoutubeChannels() {
+		return this.request("/api/youtube/channels");
+	}
+
+	async addYoutubeChannel(url) {
+		return this.request("/api/youtube/channels", {
+			method: "POST",
+			body: { url }
+		});
+	}
+
+	async removeYoutubeChannel(channelId) {
+		return this.request(`/api/youtube/channels/${encodeURIComponent(channelId)}`, {
+			method: "DELETE"
+		});
+	}
+
+	async getYoutubeVideos(limit = 25) {
+		return this.request(`/api/youtube/videos?limit=${limit}`);
+	}
+
+	async getYoutubeDirectUrl(videoId, quality = null) {
+		let url = `/api/youtube/direct/${encodeURIComponent(videoId)}`;
+		if (quality) {
+			url += `?quality=${encodeURIComponent(quality)}`;
+		}
+		return this.request(url);
+	}
+
+	// Twitch VOD direct URL
+	async getVodDirectUrl(videoId, quality = null) {
+		let url = `/api/vod/direct/${encodeURIComponent(videoId)}`;
+		if (quality) {
+			url += `?quality=${encodeURIComponent(quality)}`;
+		}
+		return this.request(url);
+	}
+
+	// Twitch Clip direct URL
+	async getClipDirectUrl(clipId, quality = null) {
+		let url = `/api/clip/direct/${encodeURIComponent(clipId)}`;
+		if (quality) {
+			url += `?quality=${encodeURIComponent(quality)}`;
+		}
+		return this.request(url);
+	}
 }
 
 // Export API instance
