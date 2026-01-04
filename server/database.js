@@ -52,6 +52,34 @@ class DatabaseManager {
 				channel_url TEXT,
 				added_at INTEGER
 			);
+
+			CREATE TABLE IF NOT EXISTS recording_rules (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				channel_login TEXT NOT NULL,
+				channel_name TEXT,
+				game_name TEXT,
+				quality TEXT DEFAULT 'best',
+				enabled INTEGER DEFAULT 1,
+				created_at INTEGER,
+				updated_at INTEGER
+			);
+
+			CREATE TABLE IF NOT EXISTS recordings (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				rule_id INTEGER,
+				channel_login TEXT NOT NULL,
+				channel_name TEXT,
+				game_name TEXT,
+				stream_title TEXT,
+				filename TEXT,
+				filepath TEXT,
+				file_size INTEGER DEFAULT 0,
+				started_at INTEGER,
+				ended_at INTEGER,
+				status TEXT DEFAULT 'recording',
+				error TEXT,
+				FOREIGN KEY (rule_id) REFERENCES recording_rules(id)
+			);
 		`);
 
 		console.log("✓ Database initialized");
@@ -222,6 +250,139 @@ class DatabaseManager {
 	getYoutubeChannel(channelId) {
 		const stmt = this.db.prepare("SELECT * FROM youtube_channels WHERE channel_id = ?");
 		return stmt.get(channelId);
+	}
+
+	// Recording rules methods
+	addRecordingRule(rule) {
+		const stmt = this.db.prepare(`
+			INSERT INTO recording_rules (channel_login, channel_name, game_name, quality, enabled, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?)
+		`);
+		const result = stmt.run(
+			rule.channel_login.toLowerCase(),
+			rule.channel_name,
+			rule.game_name || null,
+			rule.quality || "best",
+			rule.enabled !== false ? 1 : 0,
+			Date.now(),
+			Date.now()
+		);
+		return result.lastInsertRowid;
+	}
+
+	updateRecordingRule(id, updates) {
+		const fields = [];
+		const values = [];
+
+		if (updates.channel_login !== undefined) {
+			fields.push("channel_login = ?");
+			values.push(updates.channel_login.toLowerCase());
+		}
+		if (updates.channel_name !== undefined) {
+			fields.push("channel_name = ?");
+			values.push(updates.channel_name);
+		}
+		if (updates.game_name !== undefined) {
+			fields.push("game_name = ?");
+			values.push(updates.game_name);
+		}
+		if (updates.quality !== undefined) {
+			fields.push("quality = ?");
+			values.push(updates.quality);
+		}
+		if (updates.enabled !== undefined) {
+			fields.push("enabled = ?");
+			values.push(updates.enabled ? 1 : 0);
+		}
+
+		fields.push("updated_at = ?");
+		values.push(Date.now());
+		values.push(id);
+
+		const stmt = this.db.prepare(`UPDATE recording_rules SET ${fields.join(", ")} WHERE id = ?`);
+		stmt.run(...values);
+	}
+
+	deleteRecordingRule(id) {
+		const stmt = this.db.prepare("DELETE FROM recording_rules WHERE id = ?");
+		stmt.run(id);
+	}
+
+	getRecordingRules() {
+		const stmt = this.db.prepare("SELECT * FROM recording_rules ORDER BY channel_name ASC");
+		return stmt.all();
+	}
+
+	getRecordingRule(id) {
+		const stmt = this.db.prepare("SELECT * FROM recording_rules WHERE id = ?");
+		return stmt.get(id);
+	}
+
+	// Recordings methods
+	addRecording(recording) {
+		const stmt = this.db.prepare(`
+			INSERT INTO recordings (rule_id, channel_login, channel_name, game_name, stream_title, filename, filepath, started_at, status)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`);
+		const result = stmt.run(
+			recording.rule_id,
+			recording.channel_login,
+			recording.channel_name,
+			recording.game_name,
+			recording.stream_title,
+			recording.filename,
+			recording.filepath,
+			recording.started_at,
+			recording.status || "recording"
+		);
+		return result.lastInsertRowid;
+	}
+
+	updateRecordingStatus(filepath, updates) {
+		const fields = [];
+		const values = [];
+
+		if (updates.status !== undefined) {
+			fields.push("status = ?");
+			values.push(updates.status);
+		}
+		if (updates.ended_at !== undefined) {
+			fields.push("ended_at = ?");
+			values.push(updates.ended_at);
+		}
+		if (updates.file_size !== undefined) {
+			fields.push("file_size = ?");
+			values.push(updates.file_size);
+		}
+		if (updates.error !== undefined) {
+			fields.push("error = ?");
+			values.push(updates.error);
+		}
+
+		values.push(filepath);
+
+		const stmt = this.db.prepare(`UPDATE recordings SET ${fields.join(", ")} WHERE filepath = ?`);
+		stmt.run(...values);
+	}
+
+	getRecordings(limit = 50) {
+		const stmt = this.db.prepare("SELECT * FROM recordings ORDER BY started_at DESC LIMIT ?");
+		return stmt.all(limit);
+	}
+
+	getRecordingByFilepath(filepath) {
+		const stmt = this.db.prepare("SELECT * FROM recordings WHERE filepath = ?");
+		return stmt.get(filepath);
+	}
+
+	getRecordingsOlderThan(timestamp) {
+		const stmt = this.db.prepare("SELECT * FROM recordings WHERE started_at < ? AND status != 'recording'");
+		return stmt.all(timestamp);
+	}
+
+	deleteRecording(id) {
+		const stmt = this.db.prepare("DELETE FROM recordings WHERE id = ?");
+		stmt.run(id);
 	}
 
 	close() {

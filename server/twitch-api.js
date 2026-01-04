@@ -257,6 +257,48 @@ class TwitchAPI {
 		return response.data || [];
 	}
 
+	/**
+	 * Get stream info for specific channel logins
+	 * Used for recording manager to check if specific channels are live
+	 */
+	async getStreamsByLogins(logins) {
+		if (!this.isAuthenticated()) {
+			throw new Error("Not authenticated");
+		}
+
+		if (!logins || logins.length === 0) {
+			return [];
+		}
+
+		// Twitch API allows up to 100 logins per request
+		const response = await this.makeRequest("/streams", {
+			query: {
+				user_login: logins,
+				first: 100
+			}
+		});
+
+		return response.data || [];
+	}
+
+	/**
+	 * Search games by name
+	 */
+	async searchGames(query) {
+		if (!this.isAuthenticated()) {
+			throw new Error("Not authenticated");
+		}
+
+		const response = await this.makeRequest("/search/categories", {
+			query: {
+				query: query,
+				first: 20
+			}
+		});
+
+		return response.data || [];
+	}
+
 	async getChannel(channelName) {
 		const response = await this.makeRequest("/users", {
 			query: {

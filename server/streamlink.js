@@ -146,9 +146,12 @@ class StreamlinkManager extends EventEmitter {
 		                   (this.serverConfig.host === "0.0.0.0" ? this.getLocalIpAddress() : this.serverConfig.host);
 		const url = `http://${streamHost}:${port}/`;
 
+		// Extract actual channel name (strip quality suffix like @720p60)
+		const actualChannel = channel.includes("@") ? channel.split("@")[0] : channel;
+
 		// Determine the source URL (Twitch channel or custom URL for YouTube etc.)
-		const sourceUrl = customUrl || `twitch.tv/${channel}`;
-		const isTwitch = !customUrl && !channel.startsWith("yt:");
+		const sourceUrl = customUrl || `twitch.tv/${actualChannel}`;
+		const isTwitch = !customUrl && !actualChannel.startsWith("yt:");
 
 		const args = [
 			sourceUrl,

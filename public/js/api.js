@@ -190,6 +190,59 @@ class API {
 		}
 		return this.request(url);
 	}
+
+	// Recording Rules
+	async getRecordingRules() {
+		return this.request("/api/recording-rules");
+	}
+
+	async addRecordingRule(rule) {
+		return this.request("/api/recording-rules", {
+			method: "POST",
+			body: rule
+		});
+	}
+
+	async updateRecordingRule(id, updates) {
+		return this.request(`/api/recording-rules/${id}`, {
+			method: "PUT",
+			body: updates
+		});
+	}
+
+	async deleteRecordingRule(id) {
+		return this.request(`/api/recording-rules/${id}`, {
+			method: "DELETE"
+		});
+	}
+
+	// Recordings
+	async getRecordings(limit = 50) {
+		return this.request(`/api/recordings?limit=${limit}`);
+	}
+
+	async deleteRecording(id) {
+		return this.request(`/api/recordings/${id}`, {
+			method: "DELETE"
+		});
+	}
+
+	// Recording Settings
+	async getRecordingSettings() {
+		return this.request("/api/recording-settings");
+	}
+
+	async updateRecordingSettings(settings) {
+		return this.request("/api/recording-settings", {
+			method: "PUT",
+			body: settings
+		});
+	}
+
+	// Search games
+	async searchGames(query) {
+		return this.request(`/api/games/search?q=${encodeURIComponent(query)}`);
+	}
 }
 
 // Export API instance

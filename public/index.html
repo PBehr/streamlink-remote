@@ -52,6 +52,10 @@
 				<span class="icon">📺</span>
 				YouTube
 			</button>
+			<button class="nav-item" data-view="recordings">
+				<span class="icon">⏺️</span>
+				DVR
+			</button>
 			<button class="nav-item" data-view="settings">
 				<span class="icon">⚙️</span>
 				Settings
@@ -180,6 +184,74 @@
 					<div id="youtube-empty" class="empty-state hidden">
 						<p>No YouTube channels added yet</p>
 						<p class="text-muted">Add a channel above to see recent videos</p>
+					</div>
+				</div>
+			</div>
+
+			<!-- Recordings/DVR View -->
+			<div id="view-recordings" class="view">
+				<div class="view-header">
+					<h2>DVR - Auto-Recordings</h2>
+				</div>
+
+				<!-- Recording Rules Section -->
+				<div class="recording-rules-section">
+					<h3>Recording Rules</h3>
+					<p class="text-muted">Automatically record streams when a channel goes live with a specific game.</p>
+
+					<div class="recording-rule-form">
+						<div class="form-row">
+							<input type="text" id="rule-channel" placeholder="Channel name (e.g. eliasn97)" class="input">
+							<input type="text" id="rule-game" placeholder="Game filter (optional, e.g. Among Us)" class="input">
+							<select id="rule-quality" class="select">
+								<option value="best">Best Quality</option>
+								<option value="1080p60">1080p60</option>
+								<option value="1080p">1080p</option>
+								<option value="720p60">720p60</option>
+								<option value="720p">720p</option>
+							</select>
+							<button id="add-rule-btn" class="btn btn-primary">Add Rule</button>
+						</div>
+					</div>
+
+					<div id="recording-rules-list" class="recording-rules-list"></div>
+					<div id="rules-empty" class="empty-state hidden">
+						<p>No recording rules configured</p>
+						<p class="text-muted">Add a rule above to automatically record streams</p>
+					</div>
+				</div>
+
+				<!-- Active Recordings Section -->
+				<div class="active-recordings-section">
+					<h3>Active Recordings</h3>
+					<div id="active-recordings-list" class="active-recordings-list"></div>
+					<div id="active-recordings-empty" class="empty-state">
+						<p>No recordings in progress</p>
+					</div>
+				</div>
+
+				<!-- Past Recordings Section -->
+				<div class="past-recordings-section">
+					<h3>Past Recordings</h3>
+					<div id="recordings-list" class="recordings-list"></div>
+					<div id="recordings-empty" class="empty-state hidden">
+						<p>No recordings yet</p>
+					</div>
+				</div>
+
+				<!-- Settings Section -->
+				<div class="recording-settings-section">
+					<h3>Settings</h3>
+					<div class="form-row">
+						<label>Auto-delete recordings after:</label>
+						<select id="recording-max-age" class="select">
+							<option value="3">3 days</option>
+							<option value="7" selected>7 days</option>
+							<option value="14">14 days</option>
+							<option value="30">30 days</option>
+							<option value="0">Never</option>
+						</select>
+						<button id="save-recording-settings-btn" class="btn">Save</button>
 					</div>
 				</div>
 			</div>

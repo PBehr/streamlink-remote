@@ -48,6 +48,7 @@ const TwitchAPI = require("./twitch-api");
 const StreamlinkManager = require("./streamlink");
 const YouTubeService = require("./youtube");
 const YtDlpManager = require("./ytdlp");
+const RecordingManager = require("./recording-manager");
 
 const app = express();
 const server = http.createServer(app);
@@ -60,6 +61,7 @@ const twitchAPI = new TwitchAPI(config.twitch, db);
 const streamlink = new StreamlinkManager(config.streamlink, config.server);
 const youtubeService = new YouTubeService();
 const ytdlp = new YtDlpManager(config.server);
+const recordingManager = new RecordingManager(config, twitchAPI, db);
 
 // Middleware
 app.use(cors());
@@ -1332,6 +1334,152 @@ app.get("/youtube/:videoId", async (req, res) => {
 });
 
 // ============================================================================
+// RECORDING RULES API - Auto-record streams by channel/game
+// ============================================================================
+
+// Get all recording rules
+app.get("/api/recording-rules", (req, res) => {
+	try {
+		const rules = db.getRecordingRules();
+		res.json({ rules });
+	} catch (error) {
+		res.status(500).json({ error: error.message });
+	}
+});
+
+// Add a new recording rule
+app.post("/api/recording-rules", async (req, res) => {
+	try {
+		const { channel_login, channel_name, game_name, quality, enabled } = req.body;
+
+		if (!channel_login) {
+			return res.status(400).json({ error: "channel_login is required" });
+		}
+
+		const ruleId = db.addRecordingRule({
+			channel_login,
+			channel_name: channel_name || channel_login,
+			game_name: game_name || null,
+			quality: quality || "best",
+			enabled: enabled !== false
+		});
+
+		const rule = db.getRecordingRule(ruleId);
+		res.status(201).json({ rule });
+	} catch (error) {
+		res.status(500).json({ error: error.message });
+	}
+});
+
+// Update a recording rule
+app.put("/api/recording-rules/:id", (req, res) => {
+	try {
+		const { id } = req.params;
+		const updates = req.body;
+
+		const existing = db.getRecordingRule(id);
+		if (!existing) {
+			return res.status(404).json({ error: "Rule not found" });
+		}
+
+		db.updateRecordingRule(id, updates);
+		const rule = db.getRecordingRule(id);
+		res.json({ rule });
+	} catch (error) {
+		res.status(500).json({ error: error.message });
+	}
+});
+
+// Delete a recording rule
+app.delete("/api/recording-rules/:id", (req, res) => {
+	try {
+		const { id } = req.params;
+
+		const existing = db.getRecordingRule(id);
+		if (!existing) {
+			return res.status(404).json({ error: "Rule not found" });
+		}
+
+		db.deleteRecordingRule(id);
+		res.json({ success: true });
+	} catch (error) {
+		res.status(500).json({ error: error.message });
+	}
+});
+
+// Get all recordings
+app.get("/api/recordings", (req, res) => {
+	try {
+		const limit = parseInt(req.query.limit) || 50;
+		const recordings = db.getRecordings(limit);
+		const activeRecordings = recordingManager.getActiveRecordings();
+		res.json({ recordings, activeRecordings });
+	} catch (error) {
+		res.status(500).json({ error: error.message });
+	}
+});
+
+// Delete a recording
+app.delete("/api/recordings/:id", (req, res) => {
+	try {
+		const { id } = req.params;
+		const recording = db.getRecordingByFilepath(id) || db.getRecordings().find(r => r.id == id);
+
+		if (!recording) {
+			return res.status(404).json({ error: "Recording not found" });
+		}
+
+		// Delete file if it exists
+		if (recording.filepath && fs.existsSync(recording.filepath)) {
+			fs.unlinkSync(recording.filepath);
+		}
+
+		db.deleteRecording(recording.id);
+		res.json({ success: true });
+	} catch (error) {
+		res.status(500).json({ error: error.message });
+	}
+});
+
+// Search games (for autocomplete)
+app.get("/api/games/search", async (req, res) => {
+	try {
+		const { q } = req.query;
+		if (!q) {
+			return res.json({ games: [] });
+		}
+
+		const games = await twitchAPI.searchGames(q);
+		res.json({ games });
+	} catch (error) {
+		res.status(500).json({ error: error.message });
+	}
+});
+
+// Get recording settings
+app.get("/api/recording-settings", (req, res) => {
+	try {
+		const maxAgeDays = db.getSetting("recording_max_age_days", 7);
+		res.json({ maxAgeDays });
+	} catch (error) {
+		res.status(500).json({ error: error.message });
+	}
+});
+
+// Update recording settings
+app.put("/api/recording-settings", (req, res) => {
+	try {
+		const { maxAgeDays } = req.body;
+		if (maxAgeDays !== undefined) {
+			db.setSetting("recording_max_age_days", maxAgeDays);
+		}
+		res.json({ success: true, maxAgeDays: db.getSetting("recording_max_age_days", 7) });
+	} catch (error) {
+		res.status(500).json({ error: error.message });
+	}
+});
+
+// ============================================================================
 // XTREAM CODES API - Compatible with Xtream Codes player API
 // ============================================================================
 
@@ -1377,6 +1525,8 @@ function getXtreamUserInfo() {
 
 // Category IDs
 const CATEGORY_LIVE_FAVORITES = "1";
+const CATEGORY_LIVE_720P = "2";
+const CATEGORY_LIVE_480P = "3";
 // Game categories use "game_{game_id}" format (e.g. "game_12345")
 const CATEGORY_VOD_FAVORITES = "10";
 const CATEGORY_VOD_ALL = "11";
@@ -1579,17 +1729,53 @@ app.get("/movie/:username/:password/:streamId", async (req, res) => {
 // Cache for user_id -> channel_login mapping (populated from live streams)
 const userIdToChannelMap = new Map();
 
+// Quality offsets for stream ID encoding (must match getXtreamLiveStreams)
+const QUALITY_OFFSET_720P_ROUTE = 10000000000;
+const QUALITY_OFFSET_480P_ROUTE = 20000000000;
+
 // Xtream Live stream URL format: /live/{username}/{password}/{stream_id}.{ext}
 // This is the standard Xtream format that IPTV clients use for live streams
+// stream_id can be:
+//   - numeric user_id (e.g. "12345")
+//   - channel_name (e.g. "eliasn97")
+//   - channel_name@quality (e.g. "eliasn97@720p60")
+//   - numeric with offset (e.g. "1000000012345" for 720p)
 app.get("/live/:username/:password/:streamId", async (req, res) => {
 	const { streamId } = req.params;
 	let channel = streamId.replace(/\.(ts|m3u8)$/, "");
+	let requestedQuality = null;
 
-	// Check if this is a numeric user_id (from Xtream API) and resolve to channel name
+	// Check for quality suffix (e.g. "channelname@720p60")
+	if (channel.includes("@")) {
+		const parts = channel.split("@");
+		channel = parts[0];
+		requestedQuality = parts[1]; // e.g. "720p60" or "480p"
+	}
+
+	// Check if this is a numeric ID (from Xtream API)
 	if (/^\d+$/.test(channel)) {
+		const numericId = parseInt(channel, 10);
+
+		// Check for quality offset in the numeric ID
+		if (numericId >= QUALITY_OFFSET_480P_ROUTE) {
+			requestedQuality = "480p";
+			channel = String(numericId - QUALITY_OFFSET_480P_ROUTE);
+		} else if (numericId >= QUALITY_OFFSET_720P_ROUTE) {
+			requestedQuality = "720p60";
+			channel = String(numericId - QUALITY_OFFSET_720P_ROUTE);
+		}
+
+		// Now resolve numeric user_id to channel name
 		const mappedChannel = userIdToChannelMap.get(channel);
 		if (mappedChannel) {
-			channel = mappedChannel;
+			// mappedChannel could be "channelname" or "channelname@quality"
+			if (mappedChannel.includes("@")) {
+				const parts = mappedChannel.split("@");
+				channel = parts[0];
+				if (!requestedQuality) requestedQuality = parts[1];
+			} else {
+				channel = mappedChannel;
+			}
 		} else {
 			// Try to refresh the mapping from live streams
 			try {
@@ -1597,7 +1783,7 @@ app.get("/live/:username/:password/:streamId", async (req, res) => {
 				for (const stream of liveStreams) {
 					userIdToChannelMap.set(stream.user_id, stream.user_login);
 				}
-				const refreshedChannel = userIdToChannelMap.get(streamId.replace(/\.(ts|m3u8)$/, ""));
+				const refreshedChannel = userIdToChannelMap.get(channel);
 				if (refreshedChannel) {
 					channel = refreshedChannel;
 				}
@@ -1607,78 +1793,44 @@ app.get("/live/:username/:password/:streamId", async (req, res) => {
 		}
 	}
 
-	console.log(`[Xtream] Live stream request (via /live): ${channel}`);
+	// Determine quality: URL param > DB settings > default
+	let quality;
+	if (requestedQuality) {
+		quality = requestedQuality;
+	} else {
+		const settings = db.getSettings();
+		quality = settings.defaultQuality || "best";
+	}
+
+	console.log(`[Xtream] Live stream request (via /live): ${channel} @ ${quality}`);
 
 	try {
-		// Check if stream is already running
-		if (streamlink.isStreamActive(channel)) {
+		// Check if stream is already running with same quality
+		// For different qualities, we need to start a new stream
+		const streamKey = requestedQuality ? `${channel}@${requestedQuality}` : channel;
+
+		if (streamlink.isStreamActive(streamKey)) {
 			const streams = streamlink.getActiveStreams();
-			const stream = streams.find(s => s.channel.toLowerCase() === channel.toLowerCase());
+			const stream = streams.find(s => s.channel.toLowerCase() === streamKey.toLowerCase());
 			if (stream) {
-				streamlink.trackClientConnect(channel);
-				// Pipe the TS stream directly to client
-				return proxyTsStream(res, stream.url);
+				streamlink.trackClientConnect(streamKey);
+				// Redirect to the stream URL
+				return res.redirect(302, stream.url);
 			}
 		}
 
-		// Start the stream
-		const result = await streamlink.startStream(channel);
+		// Start the stream with requested quality
+		const result = await streamlink.startStream(streamKey, quality);
 		if (result.success) {
-			streamlink.trackClientConnect(channel);
-			// Pipe the TS stream directly to client
-			return proxyTsStream(res, result.url);
+			streamlink.trackClientConnect(streamKey);
+			// Redirect to the stream URL
+			return res.redirect(302, result.url);
 		}
 		return res.status(503).send(`Stream unavailable: ${result.error}`);
 	} catch (error) {
 		return res.status(503).send(`Stream error: ${error.message}`);
 	}
 });
-
-// Helper function to proxy TS stream
-async function proxyTsStream(res, streamUrl) {
-	try {
-		const response = await fetch(streamUrl);
-		if (!response.ok) {
-			return res.status(502).send("Failed to fetch stream");
-		}
-
-		res.setHeader('Content-Type', 'video/mp2t');
-		res.setHeader('Access-Control-Allow-Origin', '*');
-		res.setHeader('Cache-Control', 'no-cache');
-
-		// Pipe the stream directly
-		const reader = response.body.getReader();
-		const pump = async () => {
-			while (true) {
-				const { done, value } = await reader.read();
-				if (done) break;
-				if (!res.writableEnded) {
-					res.write(Buffer.from(value));
-				} else {
-					break;
-				}
-			}
-			if (!res.writableEnded) {
-				res.end();
-			}
-		};
-
-		pump().catch(err => {
-			console.error('[Xtream] Stream proxy error:', err.message);
-			if (!res.writableEnded) {
-				res.end();
-			}
-		});
-
-		// Handle client disconnect
-		res.on('close', () => {
-			reader.cancel();
-		});
-	} catch (error) {
-		console.error('[Xtream] Proxy error:', error.message);
-		res.status(502).send(`Proxy error: ${error.message}`);
-	}
-}
 
 // Xtream live stream URL format: /{username}/{password}/{stream_id}
 app.get("/:username/:password/:streamId", async (req, res) => {
@@ -1749,8 +1901,12 @@ app.get("/:username/:password/:streamId", async (req, res) => {
 			}
 		}
 
-		// Start the stream
-		const result = await streamlink.startStream(channel);
+		// Get quality from database settings
+		const settings = db.getSettings();
+		const quality = settings.defaultQuality || "best";
+
+		// Start the stream with quality from settings
+		const result = await streamlink.startStream(channel, quality);
 		if (result.success) {
 			streamlink.trackClientConnect(channel);
 			return res.redirect(302, result.url);
@@ -1803,7 +1959,9 @@ async function proxyHlsManifest(res, manifestUrl) {
 
 async function getXtreamLiveCategories() {
 	const categories = [
-		{ category_id: CATEGORY_LIVE_FAVORITES, category_name: "⭐ Favorites", parent_id: 0 }
+		{ category_id: CATEGORY_LIVE_FAVORITES, category_name: "⭐ Favorites (Best)", parent_id: 0 },
+		{ category_id: CATEGORY_LIVE_720P, category_name: "📺 All Live [720p60]", parent_id: 0 },
+		{ category_id: CATEGORY_LIVE_480P, category_name: "📺 All Live [480p]", parent_id: 0 }
 	];
 
 	// Get live streams to extract unique game categories
@@ -1833,6 +1991,14 @@ async function getXtreamLiveCategories() {
 	return categories;
 }
 
+// Quality stream ID encoding (must be numeric for UHF compatibility):
+// - Normal streams: use Twitch user_id directly
+// - 720p streams: user_id + 10,000,000,000 (10 billion offset)
+// - 480p streams: user_id + 20,000,000,000 (20 billion offset)
+// Twitch user_ids are ~9 digits max, so this keeps IDs unique
+const QUALITY_OFFSET_720P = 10000000000;
+const QUALITY_OFFSET_480P = 20000000000;
+
 async function getXtreamLiveStreams(categoryId = null) {
 	if (!twitchAPI.isAuthenticated()) {
 		return [];
@@ -1851,51 +2017,77 @@ async function getXtreamLiveStreams(categoryId = null) {
 	// Get live streams
 	const liveStreams = await twitchAPI.getLiveStreams();
 
-	for (const stream of liveStreams) {
-		const isFavorite = favoriteLogins.has(stream.user_login.toLowerCase());
-		const gameId = stream.game_id || "0";
-		const gameCategoryId = `game_${gameId}`;
-
-		// Filter by category if specified
-		if (categoryId === CATEGORY_LIVE_FAVORITES && !isFavorite) continue;
-		// Filter by game category (e.g. "game_12345")
-		if (categoryId && categoryId.startsWith("game_") && categoryId !== gameCategoryId) continue;
-		// When categoryId is null, include all streams
-
+	// Helper function to add a stream entry
+	const addStreamEntry = (stream, qualitySuffix, quality, streamIdOffset, targetCategoryId) => {
 		const channelName = stream.user_login;
-		const twitchUserId = stream.user_id; // Numeric Twitch user ID for EPG matching
+		const twitchUserId = stream.user_id;
+		const twitchUserIdNum = parseInt(twitchUserId, 10);
 		const displayName = stream.user_name || channelName;
 		const gameName = stream.game_name || "Just Chatting";
 		const streamTitle = stream.title || "";
 		const viewerCount = stream.viewer_count || 0;
+
+		// Store mapping for resolution
+		userIdToChannelMap.set(twitchUserId, channelName);
+		if (streamIdOffset > 0) {
+			const qualityStreamId = String(twitchUserIdNum + streamIdOffset);
+			userIdToChannelMap.set(qualityStreamId, `${channelName}${qualitySuffix}`);
+		}
 
 		let logoUrl = stream.thumbnail_url || "";
 		if (logoUrl) {
 			logoUrl = logoUrl.replace('{width}', '440').replace('{height}', '248');
 		}
 
-		// Determine category_id for the stream:
-		// - If favorite, show in Favorites category
-		// - Otherwise, show in the game category
-		const streamCategoryId = isFavorite ? CATEGORY_LIVE_FAVORITES : gameCategoryId;
+		const streamId = streamIdOffset > 0 ? String(twitchUserIdNum + streamIdOffset) : twitchUserId;
 
 		streams.push({
 			num: streams.length + 1,
-			name: `${displayName} - ${gameName}`,
+			name: qualitySuffix ? `${displayName} [${quality}]` : `${displayName} - ${gameName}`,
 			stream_type: "live",
-			stream_id: twitchUserId, // Use numeric Twitch user_id
+			stream_id: streamId,
 			stream_icon: logoUrl,
-			epg_channel_id: twitchUserId, // Must match XMLTV channel id
+			epg_channel_id: twitchUserId,
 			added: Math.floor(Date.now() / 1000),
-			category_id: streamCategoryId,
-			custom_sid: channelName, // Store channel name here for URL routing
+			category_id: targetCategoryId,
+			custom_sid: channelName,
 			tv_archive: 0,
-			direct_source: `http://${streamHost}:${streamPort}/live/${XTREAM_USER}/${XTREAM_PASS}/${channelName}.ts`,
+			direct_source: `http://${streamHost}:${streamPort}/live/${XTREAM_USER}/${XTREAM_PASS}/${streamId}.ts`,
 			tv_archive_duration: 0,
-			// Extra info
 			title: streamTitle,
 			viewers: viewerCount
 		});
+	};
+
+	for (const stream of liveStreams) {
+		const isFavorite = favoriteLogins.has(stream.user_login.toLowerCase());
+		const gameId = stream.game_id || "0";
+		const gameCategoryId = `game_${gameId}`;
+		const defaultCategoryId = isFavorite ? CATEGORY_LIVE_FAVORITES : gameCategoryId;
+
+		// When no category filter, return all streams in their default categories PLUS quality variants
+		if (categoryId === null) {
+			// Add default quality stream (in favorites or game category)
+			addStreamEntry(stream, "", "best", 0, defaultCategoryId);
+			// Add 720p variant
+			addStreamEntry(stream, "@720p60", "720p60", QUALITY_OFFSET_720P, CATEGORY_LIVE_720P);
+			// Add 480p variant
+			addStreamEntry(stream, "@480p", "480p", QUALITY_OFFSET_480P, CATEGORY_LIVE_480P);
+			continue;
+		}
+
+		// Filter by specific category
+		if (categoryId === CATEGORY_LIVE_FAVORITES) {
+			if (!isFavorite) continue;
+			addStreamEntry(stream, "", "best", 0, CATEGORY_LIVE_FAVORITES);
+		} else if (categoryId === CATEGORY_LIVE_720P) {
+			addStreamEntry(stream, "@720p60", "720p60", QUALITY_OFFSET_720P, CATEGORY_LIVE_720P);
+		} else if (categoryId === CATEGORY_LIVE_480P) {
+			addStreamEntry(stream, "@480p", "480p", QUALITY_OFFSET_480P, CATEGORY_LIVE_480P);
+		} else if (categoryId.startsWith("game_")) {
+			if (categoryId !== gameCategoryId) continue;
+			addStreamEntry(stream, "", "best", 0, gameCategoryId);
+		}
 	}
 
 	return streams;
@@ -2277,6 +2469,9 @@ server.listen(PORT, HOST, () => {
 	// Initialize database
 	db.init();
 
+	// Initialize recording manager
+	recordingManager.init();
+
 	// Check if authenticated
 	if (twitchAPI.isAuthenticated()) {
 		console.log(`✓ Authenticated as: ${twitchAPI.getUser()?.login || "unknown"}`);
@@ -2286,8 +2481,9 @@ server.listen(PORT, HOST, () => {
 });
 
 // Graceful shutdown
-process.on("SIGTERM", () => {
+process.on("SIGTERM", async () => {
 	console.log("SIGTERM received, shutting down gracefully...");
+	await recordingManager.shutdown();
 	streamlink.stopAll();
 	ytdlp.stopAll();
 	server.close(() => {

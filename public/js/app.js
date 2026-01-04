@@ -127,6 +127,9 @@ class App {
 				case "youtube":
 					await this.loadYouTube();
 					break;
+				case "recordings":
+					await this.loadRecordings();
+					break;
 				case "settings":
 					await this.loadSettings();
 					break;
@@ -1300,6 +1303,265 @@ class App {
 		} catch (error) {
 			console.error("Error populating channel dropdown:", error);
 		}
+	}
+
+	// ============================================================================
+	// RECORDINGS / DVR
+	// ============================================================================
+
+	async loadRecordings() {
+		await this.loadRecordingRules();
+		await this.loadRecordingsList();
+		await this.loadRecordingSettings();
+		this.setupRecordingListeners();
+	}
+
+	setupRecordingListeners() {
+		// Add rule button
+		const addRuleBtn = document.getElementById("add-rule-btn");
+		if (addRuleBtn && !addRuleBtn.hasAttribute("data-listener")) {
+			addRuleBtn.setAttribute("data-listener", "true");
+			addRuleBtn.addEventListener("click", () => this.addRecordingRule());
+		}
+
+		// Save settings button
+		const saveSettingsBtn = document.getElementById("save-recording-settings-btn");
+		if (saveSettingsBtn && !saveSettingsBtn.hasAttribute("data-listener")) {
+			saveSettingsBtn.setAttribute("data-listener", "true");
+			saveSettingsBtn.addEventListener("click", () => this.saveRecordingSettings());
+		}
+	}
+
+	async loadRecordingRules() {
+		const rulesList = document.getElementById("recording-rules-list");
+		const emptyState = document.getElementById("rules-empty");
+
+		try {
+			const data = await api.getRecordingRules();
+			const rules = data.rules || [];
+
+			if (rules.length === 0) {
+				rulesList.innerHTML = "";
+				emptyState.classList.remove("hidden");
+				return;
+			}
+
+			emptyState.classList.add("hidden");
+
+			rulesList.innerHTML = rules.map(rule => `
+				<div class="recording-rule-item" data-rule-id="${rule.id}">
+					<div class="rule-info">
+						<span class="rule-channel">${this.escapeHtml(rule.channel_name || rule.channel_login)}</span>
+						<span class="rule-game">${rule.game_name ? `🎮 ${this.escapeHtml(rule.game_name)}` : '📺 Any game'}</span>
+						<span class="rule-quality">${rule.quality || 'best'}</span>
+					</div>
+					<div class="rule-actions">
+						<label class="toggle-switch">
+							<input type="checkbox" class="rule-enabled-toggle" ${rule.enabled ? 'checked' : ''}>
+							<span class="slider"></span>
+						</label>
+						<button class="btn btn-small btn-error delete-rule-btn">Delete</button>
+					</div>
+				</div>
+			`).join("");
+
+			// Attach listeners
+			rulesList.querySelectorAll(".rule-enabled-toggle").forEach(toggle => {
+				toggle.addEventListener("change", async (e) => {
+					const ruleId = e.target.closest(".recording-rule-item").dataset.ruleId;
+					await this.toggleRecordingRule(ruleId, e.target.checked);
+				});
+			});
+
+			rulesList.querySelectorAll(".delete-rule-btn").forEach(btn => {
+				btn.addEventListener("click", async (e) => {
+					const ruleId = e.target.closest(".recording-rule-item").dataset.ruleId;
+					await this.deleteRecordingRule(ruleId);
+				});
+			});
+		} catch (error) {
+			this.showToast(`Error loading rules: ${error.message}`, "error");
+		}
+	}
+
+	async loadRecordingsList() {
+		const activeList = document.getElementById("active-recordings-list");
+		const activeEmpty = document.getElementById("active-recordings-empty");
+		const recordingsList = document.getElementById("recordings-list");
+		const recordingsEmpty = document.getElementById("recordings-empty");
+
+		try {
+			const data = await api.getRecordings();
+			const recordings = data.recordings || [];
+			const activeRecordings = data.activeRecordings || [];
+
+			// Active recordings
+			if (activeRecordings.length === 0) {
+				activeList.innerHTML = "";
+				activeEmpty.classList.remove("hidden");
+			} else {
+				activeEmpty.classList.add("hidden");
+				activeList.innerHTML = activeRecordings.map(rec => `
+					<div class="recording-item active-recording">
+						<span class="rec-indicator">🔴</span>
+						<span class="rec-channel">${this.escapeHtml(rec.channelLogin)}</span>
+						<span class="rec-game">${this.escapeHtml(rec.gameName || '')}</span>
+						<span class="rec-duration">${this.formatDuration(rec.duration)}</span>
+					</div>
+				`).join("");
+			}
+
+			// Past recordings
+			const pastRecordings = recordings.filter(r => r.status !== 'recording');
+			if (pastRecordings.length === 0) {
+				recordingsList.innerHTML = "";
+				recordingsEmpty.classList.remove("hidden");
+			} else {
+				recordingsEmpty.classList.add("hidden");
+				recordingsList.innerHTML = pastRecordings.map(rec => {
+					const date = new Date(rec.started_at).toLocaleDateString("de-DE");
+					const duration = rec.ended_at ? this.formatDuration(rec.ended_at - rec.started_at) : "?";
+					const size = rec.file_size ? this.formatFileSize(rec.file_size) : "";
+					const statusClass = rec.status === 'completed' ? 'status-success' : 'status-error';
+
+					return `
+						<div class="recording-item" data-recording-id="${rec.id}">
+							<div class="rec-main-info">
+								<span class="rec-channel">${this.escapeHtml(rec.channel_name || rec.channel_login)}</span>
+								<span class="rec-game">${this.escapeHtml(rec.game_name || '')}</span>
+							</div>
+							<div class="rec-meta">
+								<span class="rec-date">${date}</span>
+								<span class="rec-duration">${duration}</span>
+								<span class="rec-size">${size}</span>
+								<span class="rec-status ${statusClass}">${rec.status}</span>
+							</div>
+							<div class="rec-actions">
+								<button class="btn btn-small btn-error delete-recording-btn">Delete</button>
+							</div>
+						</div>
+					`;
+				}).join("");
+
+				// Attach delete listeners
+				recordingsList.querySelectorAll(".delete-recording-btn").forEach(btn => {
+					btn.addEventListener("click", async (e) => {
+						const recId = e.target.closest(".recording-item").dataset.recordingId;
+						await this.deleteRecording(recId);
+					});
+				});
+			}
+		} catch (error) {
+			this.showToast(`Error loading recordings: ${error.message}`, "error");
+		}
+	}
+
+	async loadRecordingSettings() {
+		try {
+			const data = await api.getRecordingSettings();
+			const select = document.getElementById("recording-max-age");
+			if (select && data.maxAgeDays !== undefined) {
+				select.value = String(data.maxAgeDays);
+			}
+		} catch (error) {
+			console.error("Error loading recording settings:", error);
+		}
+	}
+
+	async addRecordingRule() {
+		const channelInput = document.getElementById("rule-channel");
+		const gameInput = document.getElementById("rule-game");
+		const qualitySelect = document.getElementById("rule-quality");
+
+		const channel = channelInput.value.trim();
+		const game = gameInput.value.trim();
+		const quality = qualitySelect.value;
+
+		if (!channel) {
+			this.showToast("Please enter a channel name", "error");
+			return;
+		}
+
+		try {
+			await api.addRecordingRule({
+				channel_login: channel,
+				channel_name: channel,
+				game_name: game || null,
+				quality: quality
+			});
+
+			channelInput.value = "";
+			gameInput.value = "";
+			this.showToast("Recording rule added", "success");
+			await this.loadRecordingRules();
+		} catch (error) {
+			this.showToast(`Error adding rule: ${error.message}`, "error");
+		}
+	}
+
+	async toggleRecordingRule(ruleId, enabled) {
+		try {
+			await api.updateRecordingRule(ruleId, { enabled });
+			this.showToast(`Rule ${enabled ? 'enabled' : 'disabled'}`, "success");
+		} catch (error) {
+			this.showToast(`Error updating rule: ${error.message}`, "error");
+			await this.loadRecordingRules(); // Refresh to reset toggle
+		}
+	}
+
+	async deleteRecordingRule(ruleId) {
+		if (!confirm("Delete this recording rule?")) return;
+
+		try {
+			await api.deleteRecordingRule(ruleId);
+			this.showToast("Rule deleted", "success");
+			await this.loadRecordingRules();
+		} catch (error) {
+			this.showToast(`Error deleting rule: ${error.message}`, "error");
+		}
+	}
+
+	async deleteRecording(recordingId) {
+		if (!confirm("Delete this recording? The file will be permanently removed.")) return;
+
+		try {
+			await api.deleteRecording(recordingId);
+			this.showToast("Recording deleted", "success");
+			await this.loadRecordingsList();
+		} catch (error) {
+			this.showToast(`Error deleting recording: ${error.message}`, "error");
+		}
+	}
+
+	async saveRecordingSettings() {
+		const select = document.getElementById("recording-max-age");
+		const maxAgeDays = parseInt(select.value);
+
+		try {
+			await api.updateRecordingSettings({ maxAgeDays });
+			this.showToast("Settings saved", "success");
+		} catch (error) {
+			this.showToast(`Error saving settings: ${error.message}`, "error");
+		}
+	}
+
+	formatDuration(ms) {
+		const seconds = Math.floor(ms / 1000);
+		const hours = Math.floor(seconds / 3600);
+		const minutes = Math.floor((seconds % 3600) / 60);
+		const secs = seconds % 60;
+
+		if (hours > 0) {
+			return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+		}
+		return `${minutes}:${String(secs).padStart(2, '0')}`;
+	}
+
+	formatFileSize(bytes) {
+		if (bytes < 1024) return bytes + ' B';
+		if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+		if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+		return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
 	}
 }
 

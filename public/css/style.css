@@ -807,3 +807,262 @@ body {
 		font-size: 0.65rem;
 	}
 }
+
+/* ============================================================================
+   RECORDING / DVR STYLES
+   ============================================================================ */
+
+.recording-rules-section,
+.active-recordings-section,
+.past-recordings-section,
+.recording-settings-section {
+	margin-bottom: 2rem;
+	padding: 1rem;
+	background: var(--bg-card);
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+}
+
+.recording-rules-section h3,
+.active-recordings-section h3,
+.past-recordings-section h3,
+.recording-settings-section h3 {
+	margin-bottom: 0.5rem;
+	color: var(--text);
+}
+
+.recording-rule-form {
+	margin: 1rem 0;
+}
+
+.recording-rule-form .form-row {
+	display: flex;
+	gap: 0.5rem;
+	flex-wrap: wrap;
+}
+
+.recording-rule-form .input {
+	flex: 1;
+	min-width: 150px;
+}
+
+.recording-rule-form .select {
+	min-width: 120px;
+}
+
+.recording-rules-list {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+}
+
+.recording-rule-item {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 0.75rem;
+	background: var(--bg-alt);
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+}
+
+.rule-info {
+	display: flex;
+	gap: 1rem;
+	align-items: center;
+	flex-wrap: wrap;
+}
+
+.rule-channel {
+	font-weight: 600;
+	color: var(--primary);
+}
+
+.rule-game {
+	color: var(--text-muted);
+}
+
+.rule-quality {
+	font-size: 0.75rem;
+	background: var(--bg);
+	padding: 0.2rem 0.5rem;
+	border-radius: 0.25rem;
+}
+
+.rule-actions {
+	display: flex;
+	gap: 0.5rem;
+	align-items: center;
+}
+
+/* Toggle Switch */
+.toggle-switch {
+	position: relative;
+	display: inline-block;
+	width: 40px;
+	height: 22px;
+}
+
+.toggle-switch input {
+	opacity: 0;
+	width: 0;
+	height: 0;
+}
+
+.toggle-switch .slider {
+	position: absolute;
+	cursor: pointer;
+	top: 0;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	background-color: var(--bg);
+	transition: 0.3s;
+	border-radius: 22px;
+	border: 1px solid var(--border);
+}
+
+.toggle-switch .slider:before {
+	position: absolute;
+	content: "";
+	height: 16px;
+	width: 16px;
+	left: 2px;
+	bottom: 2px;
+	background-color: var(--text-muted);
+	transition: 0.3s;
+	border-radius: 50%;
+}
+
+.toggle-switch input:checked + .slider {
+	background-color: var(--success);
+	border-color: var(--success);
+}
+
+.toggle-switch input:checked + .slider:before {
+	transform: translateX(18px);
+	background-color: white;
+}
+
+/* Recordings List */
+.active-recordings-list,
+.recordings-list {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+}
+
+.recording-item {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 0.75rem;
+	background: var(--bg-alt);
+	border: 1px solid var(--border);
+	border-radius: 0.5rem;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+}
+
+.recording-item.active-recording {
+	border-color: var(--error);
+	background: rgba(239, 68, 68, 0.1);
+}
+
+.rec-indicator {
+	animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+	0%, 100% { opacity: 1; }
+	50% { opacity: 0.5; }
+}
+
+.rec-main-info {
+	display: flex;
+	gap: 1rem;
+	align-items: center;
+	flex: 1;
+}
+
+.rec-channel {
+	font-weight: 600;
+	color: var(--text);
+}
+
+.rec-game {
+	color: var(--text-muted);
+}
+
+.rec-meta {
+	display: flex;
+	gap: 1rem;
+	align-items: center;
+	color: var(--text-muted);
+	font-size: 0.875rem;
+}
+
+.rec-status {
+	padding: 0.2rem 0.5rem;
+	border-radius: 0.25rem;
+	font-size: 0.75rem;
+	font-weight: 500;
+}
+
+.rec-status.status-success {
+	background: rgba(34, 197, 94, 0.2);
+	color: var(--success);
+}
+
+.rec-status.status-error {
+	background: rgba(239, 68, 68, 0.2);
+	color: var(--error);
+}
+
+.rec-actions {
+	display: flex;
+	gap: 0.5rem;
+}
+
+/* Recording Settings */
+.recording-settings-section .form-row {
+	display: flex;
+	gap: 0.75rem;
+	align-items: center;
+	flex-wrap: wrap;
+}
+
+.recording-settings-section label {
+	color: var(--text);
+}
+
+@media (max-width: 768px) {
+	.recording-rule-form .form-row {
+		flex-direction: column;
+	}
+
+	.recording-rule-form .input,
+	.recording-rule-form .select {
+		width: 100%;
+	}
+
+	.recording-rule-item {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+
+	.rule-actions {
+		width: 100%;
+		justify-content: flex-end;
+		margin-top: 0.5rem;
+	}
+
+	.recording-item {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+
+	.rec-meta {
+		flex-wrap: wrap;
+	}
+}
