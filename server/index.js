@@ -1532,12 +1532,14 @@ const CATEGORY_VOD_FAVORITES = "10";
 const CATEGORY_VOD_ALL = "11";
 const CATEGORY_YOUTUBE = "20";
 const CATEGORY_YOUTUBE_SHORTS = "21";
-const CATEGORY_CLIPS_FAVORITES = "30";
-const CATEGORY_CLIPS_ALL = "31";
+// Clips are now in series, not VOD
+const CATEGORY_SERIES_CLIPS_FAVORITES = "40";
+const CATEGORY_SERIES_CLIPS_ALL = "41";
 
-// Cache for VOD/YouTube manifest URLs (expires after 5 minutes)
+// Cache for VOD/YouTube manifest URLs (expires after 2 hours)
+// YouTube URLs are valid for ~6 hours, so 2 hours is safe
 const vodUrlCache = new Map();
-const VOD_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const VOD_CACHE_TTL = 2 * 60 * 60 * 1000; // 2 hours
 
 function getCachedVodUrl(videoId) {
 	const cached = vodUrlCache.get(videoId);
@@ -1598,16 +1600,15 @@ app.get("/player_api.php", async (req, res) => {
 				return res.json(await getXtreamVodInfo(vodId));
 
 			case "get_series_categories":
-				// Return empty - no series support to speed up sync
-				return res.json([]);
+				return res.json(await getXtreamSeriesCategories());
 
 			case "get_series":
-				// Return empty - no series support
-				return res.json([]);
+				const seriesCatId = req.query.category_id;
+				return res.json(await getXtreamSeries(seriesCatId));
 
 			case "get_series_info":
-				// Return empty - no series support
-				return res.json({});
+				const seriesId = req.query.series_id;
+				return res.json(await getXtreamSeriesInfo(seriesId));
 
 			case "get_short_epg":
 				const streamId = req.query.stream_id;
@@ -1692,7 +1693,8 @@ app.get("/movie/:username/:password/:streamId", async (req, res) => {
 				}
 			}
 			if (manifestUrl) {
-				return proxyHlsManifest(res, manifestUrl);
+				// Direct redirect to YouTube - faster than proxying
+				return res.redirect(302, manifestUrl);
 			}
 			return res.status(503).send("YouTube unavailable");
 		} catch (error) {
@@ -1724,6 +1726,37 @@ app.get("/movie/:username/:password/:streamId", async (req, res) => {
 	}
 
 	return res.status(404).send("Unknown VOD type");
+});
+
+// Xtream Series episode URL format: /series/{username}/{password}/{stream_id}.{ext}
+app.get("/series/:username/:password/:streamId", async (req, res) => {
+	const { streamId } = req.params;
+	const videoId = streamId.replace(/\.(ts|m3u8|mp4|mkv)$/, "");
+	console.log(`[Xtream] Series episode request: ${videoId}`);
+
+	// Clip request (same as movie endpoint)
+	if (videoId.startsWith("clip_")) {
+		const clipId = videoId.replace("clip_", "");
+		try {
+			let clipUrl = getCachedVodUrl(`clip_${clipId}`);
+			if (!clipUrl) {
+				const result = await ytdlp.getTwitchClipDirectUrl(clipId);
+				if (result.success && result.directUrl) {
+					clipUrl = result.directUrl;
+					setCachedVodUrl(`clip_${clipId}`, clipUrl);
+				}
+			}
+			if (clipUrl) {
+				// Clips are direct MP4 files - redirect to them
+				return res.redirect(302, clipUrl);
+			}
+			return res.status(503).send("Clip unavailable");
+		} catch (error) {
+			return res.status(503).send(`Clip error: ${error.message}`);
+		}
+	}
+
+	return res.status(404).send("Unknown series episode type");
 });
 
 // Cache for user_id -> channel_login mapping (populated from live streams)
@@ -2097,8 +2130,6 @@ async function getXtreamVodCategories() {
 	const categories = [
 		{ category_id: CATEGORY_VOD_FAVORITES, category_name: "⭐ Favorites VODs", parent_id: 0 },
 		{ category_id: CATEGORY_VOD_ALL, category_name: "📼 All VODs", parent_id: 0 },
-		{ category_id: CATEGORY_CLIPS_FAVORITES, category_name: "⭐ Favorites Clips", parent_id: 0 },
-		{ category_id: CATEGORY_CLIPS_ALL, category_name: "🎬 All Clips", parent_id: 0 },
 		{ category_id: CATEGORY_YOUTUBE, category_name: "▶️ YouTube", parent_id: 0 },
 		{ category_id: CATEGORY_YOUTUBE_SHORTS, category_name: "📱 YouTube Shorts", parent_id: 0 }
 	];
@@ -2211,62 +2242,6 @@ async function getXtreamVodStreams(categoryId = null) {
 		}
 	}
 
-	// Twitch Clips
-	if (!categoryId || categoryId === CATEGORY_CLIPS_FAVORITES || categoryId === CATEGORY_CLIPS_ALL) {
-		const favorites = db.getFavorites();
-		const favoriteLogins = new Set(favorites.map(f => f.channel_login.toLowerCase()));
-		const followedChannels = await twitchAPI.getFollowedChannels();
-
-		const clipsList = []; // Collect clips separately for sorting
-
-		for (const channel of followedChannels) {
-			const isFavorite = favoriteLogins.has(channel.broadcaster_login.toLowerCase());
-
-			// Filter by category
-			if (categoryId === CATEGORY_CLIPS_FAVORITES && !isFavorite) continue;
-			if (categoryId === CATEGORY_CLIPS_ALL && isFavorite) continue;
-
-			try {
-				// Get more clips (30 days) to have better selection for sorting by date
-				const clips = await twitchAPI.getClips(channel.broadcaster_id, 10, "month");
-				for (const clip of clips) {
-					clipsList.push({
-						clip,
-						channel,
-						isFavorite
-					});
-				}
-			} catch (e) {
-				// Skip channels with no clips
-			}
-		}
-
-		// Sort clips by created_at (newest first) and take top results
-		clipsList.sort((a, b) => new Date(b.clip.created_at) - new Date(a.clip.created_at));
-		const topClips = clipsList.slice(0, 150); // Limit to 150 newest clips
-
-		for (const { clip, channel, isFavorite } of topClips) {
-			vods.push({
-				num: vods.length + 1,
-				name: `${channel.broadcaster_name} - ${clip.title}`,
-				stream_type: "movie",
-				stream_id: `clip_${clip.id}`,
-				stream_icon: clip.thumbnail_url || '',
-				rating: "",
-				rating_5based: 0,
-				added: Math.floor(new Date(clip.created_at).getTime() / 1000),
-				category_id: isFavorite ? CATEGORY_CLIPS_FAVORITES : CATEGORY_CLIPS_ALL,
-				container_extension: "mp4",
-				custom_sid: "",
-				direct_source: `http://${streamHost}:${streamPort}/movie/${XTREAM_USER}/${XTREAM_PASS}/clip_${clip.id}.mp4`,
-				// Extra clip info
-				duration: clip.duration || 0,
-				duration_secs: clip.duration || 0,
-				bitrate: 0
-			});
-		}
-	}
-
 	return vods;
 }
 
@@ -2357,6 +2332,187 @@ async function getXtreamShortEpg(streamId) {
 		console.error(`[Xtream] EPG error for ${streamId}:`, error.message);
 		return { epg_listings: [] };
 	}
+}
+
+// ============================================================================
+// Xtream Series API (Clips organized by Twitch channel)
+// ============================================================================
+
+async function getXtreamSeriesCategories() {
+	const categories = [
+		{ category_id: CATEGORY_SERIES_CLIPS_FAVORITES, category_name: "⭐ Favorites Clips", parent_id: 0 },
+		{ category_id: CATEGORY_SERIES_CLIPS_ALL, category_name: "🎬 All Clips", parent_id: 0 }
+	];
+	return categories;
+}
+
+async function getXtreamSeries(categoryId = null) {
+	if (!twitchAPI.isAuthenticated()) {
+		return [];
+	}
+
+	const favorites = db.getFavorites();
+	const favoriteLogins = new Set(favorites.map(f => f.channel_login.toLowerCase()));
+	const followedChannels = await twitchAPI.getFollowedChannels();
+
+	const series = [];
+
+	for (const channel of followedChannels) {
+		const isFavorite = favoriteLogins.has(channel.broadcaster_login.toLowerCase());
+
+		// Filter by category
+		if (categoryId === CATEGORY_SERIES_CLIPS_FAVORITES && !isFavorite) continue;
+		if (categoryId === CATEGORY_SERIES_CLIPS_ALL && isFavorite) continue;
+
+		// Check if channel has clips
+		try {
+			const clips = await twitchAPI.getClips(channel.broadcaster_id, 1, "month");
+			if (clips.length === 0) continue; // Skip channels without clips
+
+			// Use broadcaster_id as series_id (numeric)
+			series.push({
+				num: series.length + 1,
+				name: channel.broadcaster_name,
+				series_id: channel.broadcaster_id,
+				cover: channel.profile_image_url || "",
+				plot: `Clips from ${channel.broadcaster_name}`,
+				cast: "",
+				director: "",
+				genre: "Gaming",
+				releaseDate: "",
+				last_modified: Math.floor(Date.now() / 1000),
+				rating: "",
+				rating_5based: 0,
+				backdrop_path: [""],
+				youtube_trailer: "",
+				episode_run_time: "60",
+				category_id: isFavorite ? CATEGORY_SERIES_CLIPS_FAVORITES : CATEGORY_SERIES_CLIPS_ALL
+			});
+		} catch (e) {
+			// Skip channels with errors
+		}
+	}
+
+	return series;
+}
+
+async function getXtreamSeriesInfo(seriesId) {
+	if (!seriesId || !twitchAPI.isAuthenticated()) {
+		return {};
+	}
+
+	const streamHost = process.env.EXTERNAL_HOST ||
+	                   (config.server.host === "0.0.0.0" ? streamlink.getLocalIpAddress() : config.server.host);
+	const streamPort = config.server.port;
+
+	const followedChannels = await twitchAPI.getFollowedChannels();
+	const channel = followedChannels.find(ch => ch.broadcaster_id === seriesId);
+
+	if (!channel) {
+		return {};
+	}
+
+	const favorites = db.getFavorites();
+	const favoriteLogins = new Set(favorites.map(f => f.channel_login.toLowerCase()));
+	const isFavorite = favoriteLogins.has(channel.broadcaster_login.toLowerCase());
+
+	// Fetch clips for this channel
+	const clips = await twitchAPI.getClips(channel.broadcaster_id, 30, "month");
+
+	// Sort clips by date (newest first)
+	clips.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+	// Group clips into "seasons" by month
+	const seasonMap = new Map();
+
+	for (const clip of clips) {
+		const date = new Date(clip.created_at);
+		const seasonKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+		const seasonName = `${date.toLocaleString('default', { month: 'long' })} ${date.getFullYear()}`;
+
+		if (!seasonMap.has(seasonKey)) {
+			seasonMap.set(seasonKey, {
+				seasonKey,
+				seasonName,
+				clips: []
+			});
+		}
+
+		seasonMap.get(seasonKey).clips.push(clip);
+	}
+
+	// Convert to episodes array
+	const episodes = {};
+	let globalEpisodeNum = 1;
+
+	// Sort seasons by key (newest first)
+	const seasons = Array.from(seasonMap.values()).sort((a, b) => b.seasonKey.localeCompare(a.seasonKey));
+
+	for (let seasonNum = 1; seasonNum <= seasons.length; seasonNum++) {
+		const season = seasons[seasonNum - 1];
+		episodes[seasonNum] = [];
+
+		for (let episodeNum = 1; episodeNum <= season.clips.length; episodeNum++) {
+			const clip = season.clips[episodeNum - 1];
+
+			episodes[seasonNum].push({
+				id: `clip_${clip.id}`,
+				episode_num: episodeNum,
+				title: clip.title,
+				container_extension: "mp4",
+				info: {
+					name: clip.title,
+					releasedate: clip.created_at.split('T')[0],
+					plot: `${clip.view_count || 0} views • ${clip.creator_name || 'Unknown'} • ${clip.duration || 0}s`,
+					duration_secs: clip.duration || 0,
+					duration: `${Math.floor((clip.duration || 0) / 60)}:${String((clip.duration || 0) % 60).padStart(2, '0')}`,
+					video: {
+						duration_secs: clip.duration || 0,
+						duration: `${Math.floor((clip.duration || 0) / 60)}:${String((clip.duration || 0) % 60).padStart(2, '0')}`
+					},
+					movie_image: clip.thumbnail_url || "",
+					rating: ""
+				},
+				custom_sid: `clip_${clip.id}`,
+				added: Math.floor(new Date(clip.created_at).getTime() / 1000),
+				season: seasonNum,
+				direct_source: `http://${streamHost}:${streamPort}/series/${XTREAM_USER}/${XTREAM_PASS}/clip_${clip.id}.mp4`
+			});
+
+			globalEpisodeNum++;
+		}
+	}
+
+	return {
+		seasons: Array.from({ length: seasons.length }, (_, i) => ({
+			air_date: seasons[i].seasonKey + "-01",
+			episode_count: episodes[i + 1].length,
+			id: i + 1,
+			name: seasons[i].seasonName,
+			overview: `Clips from ${seasons[i].seasonName}`,
+			season_number: i + 1,
+			cover: channel.profile_image_url || "",
+			cover_tmdb: channel.profile_image_url || "",
+			cover_big: channel.profile_image_url || ""
+		})),
+		info: {
+			name: channel.broadcaster_name,
+			cover: channel.profile_image_url || "",
+			plot: `Clips from ${channel.broadcaster_name}`,
+			cast: "",
+			director: "",
+			genre: "Gaming",
+			releaseDate: "",
+			last_modified: Math.floor(Date.now() / 1000),
+			rating: "",
+			rating_5based: 0,
+			backdrop_path: [""],
+			youtube_trailer: "",
+			episode_run_time: "60",
+			category_id: isFavorite ? CATEGORY_SERIES_CLIPS_FAVORITES : CATEGORY_SERIES_CLIPS_ALL
+		},
+		episodes
+	};
 }
 
 /**
