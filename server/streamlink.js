@@ -11,8 +11,8 @@ class StreamlinkManager extends EventEmitter {
 		this.nextPort = serverConfig.streamPortStart;
 		// Client tracking for auto-stop
 		this.clientConnections = new Map(); // channel -> { count: number, lastActivity: timestamp }
-		this.autoStopTimeout = 300000; // 5 minutes without clients before auto-stop
-		this.autoStopCheckInterval = 30000; // Check every 30 seconds
+		this.autoStopTimeout = 3600000; // 1 hour without clients before auto-stop (VLC keeps connection open)
+		this.autoStopCheckInterval = 60000; // Check every 60 seconds
 		this._startAutoStopChecker();
 	}
 

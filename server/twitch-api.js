@@ -325,6 +325,25 @@ class TwitchAPI {
 		};
 	}
 
+	/**
+	 * Get streams by user IDs
+	 * @param {string[]} userIds - Array of Twitch user IDs
+	 */
+	async getStreamsByUserIds(userIds) {
+		if (!this.isAuthenticated() || !userIds || userIds.length === 0) {
+			return [];
+		}
+
+		const response = await this.makeRequest("/streams", {
+			query: {
+				user_id: userIds,
+				first: userIds.length
+			}
+		});
+
+		return response.data || [];
+	}
+
 	// Export current token for manual configuration (e.g., NAS deployment)
 	exportToken() {
 		if (!this.auth || !this.auth.access_token) {
