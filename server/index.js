@@ -18,10 +18,11 @@ const config = {
 	},
 	twitch: {
 		clientId: process.env.TWITCH_CLIENT_ID || configFile.twitch.clientId,
+		clientSecret: process.env.TWITCH_CLIENT_SECRET || configFile.twitch.clientSecret,
 		redirectUri: process.env.TWITCH_REDIRECT_URI || configFile.twitch.redirectUri,
 		scopes: configFile.twitch.scopes,
 		apiBaseUrl: configFile.twitch.apiBaseUrl,
-		// Support manual auth from environment variables
+		// Support manual auth from environment variables (legacy, not needed with Authorization Code Flow)
 		manualAuth: (process.env.MANUAL_AUTH_ACCESS_TOKEN && process.env.MANUAL_AUTH_USER_ID) ? {
 			access_token: process.env.MANUAL_AUTH_ACCESS_TOKEN,
 			user_id: process.env.MANUAL_AUTH_USER_ID,
@@ -128,8 +129,54 @@ app.get("/api/auth/login", (req, res) => {
 });
 
 app.get("/auth/callback", async (req, res) => {
-	// Twitch returns token in URL fragment (hash), not query params
-	// We need to extract it with JavaScript on the client side
+	// Authorization Code Flow: Twitch returns code in query params
+	const { code, error, error_description } = req.query;
+
+	if (error) {
+		return res.send(`
+			<html>
+				<head><title>Authentication Failed</title></head>
+				<body style="font-family: sans-serif; text-align: center; padding: 50px;">
+					<h1>✗ Authentication Failed</h1>
+					<p>${error_description || error}</p>
+					<p><a href="/">Back to App</a></p>
+				</body>
+			</html>
+		`);
+	}
+
+	if (code) {
+		// Authorization Code Flow - exchange code for tokens server-side
+		try {
+			await twitchAPI.handleAuthorizationCode(code);
+			return res.send(`
+				<html>
+					<head><title>Authentication Successful</title></head>
+					<body style="font-family: sans-serif; text-align: center; padding: 50px;">
+						<h1>✓ Authentication Successful!</h1>
+						<p>You are now logged in with automatic token refresh.</p>
+						<p>You can close this window.</p>
+						<script>setTimeout(() => window.close(), 2000);</script>
+					</body>
+				</html>
+			`);
+		} catch (err) {
+			console.error("Authorization code exchange error:", err);
+			return res.send(`
+				<html>
+					<head><title>Authentication Failed</title></head>
+					<body style="font-family: sans-serif; text-align: center; padding: 50px;">
+						<h1>✗ Authentication Failed</h1>
+						<p>${err.message}</p>
+						<p><a href="/">Back to App</a></p>
+					</body>
+				</html>
+			`);
+		}
+	}
+
+	// Fallback: Legacy Implicit Flow (token in URL fragment)
+	// Keep for backwards compatibility
 	res.send(`
 		<html>
 			<head><title>Authenticating...</title></head>
@@ -137,32 +184,41 @@ app.get("/auth/callback", async (req, res) => {
 				<h1>⏳ Authenticating...</h1>
 				<p>Please wait...</p>
 				<script>
-					// Extract token from URL fragment
-					const hash = window.location.hash.substring(1);
-					const params = new URLSearchParams(hash);
-					const accessToken = params.get('access_token');
+					// Check for authorization code in query params first
+					const urlParams = new URLSearchParams(window.location.search);
+					const code = urlParams.get('code');
 
-					if (accessToken) {
-						// Send token to server
-						fetch('/api/auth/token', {
-							method: 'POST',
-							headers: { 'Content-Type': 'application/json' },
-							body: JSON.stringify({ access_token: accessToken })
-						})
-						.then(response => response.json())
-						.then(data => {
-							if (data.success) {
-								document.body.innerHTML = '<h1>✓ Authentication Successful!</h1><p>You can close this window.</p>';
-								setTimeout(() => window.close(), 2000);
-							} else {
-								document.body.innerHTML = '<h1>✗ Authentication Failed</h1><p>' + (data.error || 'Unknown error') + '</p>';
-							}
-						})
-						.catch(error => {
-							document.body.innerHTML = '<h1>✗ Error</h1><p>' + error.message + '</p>';
-						});
+					if (code) {
+						// Should have been handled server-side, reload
+						window.location.reload();
 					} else {
-						document.body.innerHTML = '<h1>✗ No Access Token</h1><p>Authorization failed or was cancelled.</p>';
+						// Legacy: Extract token from URL fragment (Implicit Flow)
+						const hash = window.location.hash.substring(1);
+						const params = new URLSearchParams(hash);
+						const accessToken = params.get('access_token');
+
+						if (accessToken) {
+							// Send token to server
+							fetch('/api/auth/token', {
+								method: 'POST',
+								headers: { 'Content-Type': 'application/json' },
+								body: JSON.stringify({ access_token: accessToken })
+							})
+							.then(response => response.json())
+							.then(data => {
+								if (data.success) {
+									document.body.innerHTML = '<h1>✓ Authentication Successful!</h1><p>You can close this window.</p>';
+									setTimeout(() => window.close(), 2000);
+								} else {
+									document.body.innerHTML = '<h1>✗ Authentication Failed</h1><p>' + (data.error || 'Unknown error') + '</p>';
+								}
+							})
+							.catch(error => {
+								document.body.innerHTML = '<h1>✗ Error</h1><p>' + error.message + '</p>';
+							});
+						} else {
+							document.body.innerHTML = '<h1>✗ No Access Token</h1><p>Authorization failed or was cancelled.</p>';
+						}
 					}
 				</script>
 			</body>
@@ -170,6 +226,7 @@ app.get("/auth/callback", async (req, res) => {
 	`);
 });
 
+// Legacy endpoint for Implicit Flow token submission
 app.post("/api/auth/token", async (req, res) => {
 	const { access_token } = req.body;
 
@@ -179,7 +236,7 @@ app.post("/api/auth/token", async (req, res) => {
 
 	try {
 		await twitchAPI.handleCallback(access_token);
-		res.json({ success: true });
+		res.json({ success: true, message: "Authenticated (Implicit Flow - no auto-refresh)" });
 	} catch (error) {
 		console.error("Token validation error:", error);
 		res.status(500).json({ success: false, error: error.message });
@@ -187,9 +244,18 @@ app.post("/api/auth/token", async (req, res) => {
 });
 
 app.get("/api/auth/status", (req, res) => {
+	const user = twitchAPI.getUser();
+	const auth = twitchAPI.auth;
+
 	res.json({
 		authenticated: twitchAPI.isAuthenticated(),
-		user: twitchAPI.getUser()
+		user: user,
+		tokenInfo: auth ? {
+			hasRefreshToken: !!auth.refresh_token,
+			expiresAt: auth.expires_at ? new Date(auth.expires_at).toISOString() : null,
+			expiresIn: auth.expires_at ? Math.max(0, Math.round((auth.expires_at - Date.now()) / 1000 / 60)) + " minutes" : null,
+			needsRefresh: twitchAPI.needsRefresh()
+		} : null
 	});
 });
 
@@ -1986,10 +2052,16 @@ async function proxyHlsManifest(res, manifestUrl) {
 		// Get base URL for relative paths
 		const baseUrl = manifestUrl.substring(0, manifestUrl.lastIndexOf('/') + 1);
 
-		// Rewrite relative URLs to absolute URLs
-		// Match lines that are segment files (.ts) or other manifests (.m3u8) without http
+		// Rewrite relative URLs to absolute URLs and fix playlist type for VODs
 		content = content.split('\n').map(line => {
 			const trimmed = line.trim();
+
+			// Convert EVENT type to VOD so player starts at beginning and allows seeking
+			// EVENT means "still recording", VOD means "complete recording"
+			if (trimmed === '#EXT-X-PLAYLIST-TYPE:EVENT') {
+				return '#EXT-X-PLAYLIST-TYPE:VOD';
+			}
+
 			// Skip empty lines, comments (#), and already absolute URLs
 			if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('http')) {
 				return line;
@@ -1997,6 +2069,11 @@ async function proxyHlsManifest(res, manifestUrl) {
 			// This is a relative URL - make it absolute
 			return baseUrl + trimmed;
 		}).join('\n');
+
+		// Add ENDLIST tag if not present (signals VOD is complete)
+		if (!content.includes('#EXT-X-ENDLIST')) {
+			content = content.trimEnd() + '\n#EXT-X-ENDLIST\n';
+		}
 
 		res.setHeader('Content-Type', contentType);
 		res.setHeader('Access-Control-Allow-Origin', '*');
@@ -2369,8 +2446,24 @@ async function getXtreamSeries(categoryId = null) {
 	// YouTube channels as series
 	if (!categoryId || categoryId === CATEGORY_SERIES_YOUTUBE || categoryId === CATEGORY_SERIES_YOUTUBE_SHORTS) {
 		const youtubeChannels = db.getYoutubeChannels();
-		for (const channel of youtubeChannels) {
-			// Use channel_id as series_id with yt_ prefix
+
+		// Fetch first video for each channel to get a thumbnail (in parallel)
+		const channelCovers = await Promise.all(
+			youtubeChannels.map(async (channel) => {
+				try {
+					const videos = await youtubeService.fetchChannelVideos(channel.channel_id);
+					// Use first non-short video thumbnail, or first video if no regular videos
+					const regularVideo = videos.find(v => !v.isShort);
+					const video = regularVideo || videos[0];
+					return video ? video.thumbnail : "";
+				} catch {
+					return "";
+				}
+			})
+		);
+
+		for (let i = 0; i < youtubeChannels.length; i++) {
+			const channel = youtubeChannels[i];
 			const seriesId = `yt_${channel.channel_id}`;
 			const targetCategory = categoryId || CATEGORY_SERIES_YOUTUBE;
 
@@ -2378,7 +2471,7 @@ async function getXtreamSeries(categoryId = null) {
 				num: series.length + 1,
 				name: channel.channel_name,
 				series_id: seriesId,
-				cover: `https://yt3.googleusercontent.com/ytc/${channel.channel_id}`,
+				cover: channelCovers[i] || "",
 				plot: `Videos from ${channel.channel_name}`,
 				cast: "",
 				director: "",
@@ -2405,40 +2498,55 @@ async function getXtreamSeries(categoryId = null) {
 		const favoriteLogins = new Set(favorites.map(f => f.channel_login.toLowerCase()));
 		const followedChannels = await twitchAPI.getFollowedChannels();
 
-		for (const channel of followedChannels) {
+		// Get profile images for all followed channels
+		const userIds = followedChannels.map(c => c.broadcaster_id);
+		const userInfos = await twitchAPI.getUsersByIds(userIds);
+		const userImageMap = new Map(userInfos.map(u => [u.id, u.profile_image_url]));
+
+		// Check clips for each channel (in parallel batches)
+		const channelsWithClips = [];
+		const batchSize = 10;
+
+		for (let i = 0; i < followedChannels.length; i += batchSize) {
+			const batch = followedChannels.slice(i, i + batchSize);
+			const results = await Promise.all(
+				batch.map(async (channel) => {
+					try {
+						const clips = await twitchAPI.getClips(channel.broadcaster_id, 1, "month");
+						return clips.length > 0 ? channel : null;
+					} catch {
+						return null;
+					}
+				})
+			);
+			channelsWithClips.push(...results.filter(Boolean));
+		}
+
+		for (const channel of channelsWithClips) {
 			const isFavorite = favoriteLogins.has(channel.broadcaster_login.toLowerCase());
 
 			// Filter by category
 			if (categoryId === CATEGORY_SERIES_CLIPS_FAVORITES && !isFavorite) continue;
 			if (categoryId === CATEGORY_SERIES_CLIPS_ALL && isFavorite) continue;
 
-			// Check if channel has clips
-			try {
-				const clips = await twitchAPI.getClips(channel.broadcaster_id, 1, "month");
-				if (clips.length === 0) continue; // Skip channels without clips
-
-				// Use broadcaster_id as series_id (numeric)
-				series.push({
-					num: series.length + 1,
-					name: channel.broadcaster_name,
-					series_id: channel.broadcaster_id,
-					cover: channel.profile_image_url || "",
-					plot: `Clips from ${channel.broadcaster_name}`,
-					cast: "",
-					director: "",
-					genre: "Gaming",
-					releaseDate: "",
-					last_modified: Math.floor(Date.now() / 1000),
-					rating: "",
-					rating_5based: 0,
-					backdrop_path: [""],
-					youtube_trailer: "",
-					episode_run_time: "60",
-					category_id: isFavorite ? CATEGORY_SERIES_CLIPS_FAVORITES : CATEGORY_SERIES_CLIPS_ALL
-				});
-			} catch (e) {
-				// Skip channels with errors
-			}
+			series.push({
+				num: series.length + 1,
+				name: channel.broadcaster_name,
+				series_id: channel.broadcaster_id,
+				cover: userImageMap.get(channel.broadcaster_id) || "",
+				plot: `Clips from ${channel.broadcaster_name}`,
+				cast: "",
+				director: "",
+				genre: "Gaming",
+				releaseDate: "",
+				last_modified: Math.floor(Date.now() / 1000),
+				rating: "",
+				rating_5based: 0,
+				backdrop_path: [""],
+				youtube_trailer: "",
+				episode_run_time: "60",
+				category_id: isFavorite ? CATEGORY_SERIES_CLIPS_FAVORITES : CATEGORY_SERIES_CLIPS_ALL
+			});
 		}
 	}
 
@@ -2585,8 +2693,8 @@ async function getXtreamSeriesInfo(seriesId) {
 	const favoriteLogins = new Set(favorites.map(f => f.channel_login.toLowerCase()));
 	const isFavorite = favoriteLogins.has(channel.broadcaster_login.toLowerCase());
 
-	// Fetch clips for this channel
-	const clips = await twitchAPI.getClips(channel.broadcaster_id, 30, "month");
+	// Fetch clips for this channel (last 24 hours, sorted by views by Twitch API)
+	const clips = await twitchAPI.getClips(channel.broadcaster_id, 30, "day");
 
 	// Sort clips by date (newest first)
 	clips.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));

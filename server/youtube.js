@@ -84,28 +84,29 @@ class YouTubeService {
 			const html = await response.text();
 
 			// Extract channel ID from page - try multiple patterns
+			// IMPORTANT: Order matters! Some patterns may match linked/featured channels instead of the main channel
 			let channelId = null;
 			let channelName = null;
 
-			// Pattern 1: "channelId":"UCxxxxxx"
-			const channelIdMatch = html.match(/"channelId":"(UC[\w-]{22})"/);
-			if (channelIdMatch) {
-				channelId = channelIdMatch[1];
+			// Pattern 1: Canonical URL - most reliable, always the main channel
+			const canonicalMatch = html.match(/<link rel="canonical" href="[^"]*\/channel\/(UC[\w-]{22})"/);
+			if (canonicalMatch) {
+				channelId = canonicalMatch[1];
 			}
 
-			// Pattern 2: "externalId":"UCxxxxxx"
+			// Pattern 2: browseId - usually the main channel
 			if (!channelId) {
-				const externalIdMatch = html.match(/"externalId":"(UC[\w-]{22})"/);
-				if (externalIdMatch) {
-					channelId = externalIdMatch[1];
+				const browseIdMatch = html.match(/"browseId":"(UC[\w-]{22})"/);
+				if (browseIdMatch) {
+					channelId = browseIdMatch[1];
 				}
 			}
 
-			// Pattern 3: /channel/UCxxxxxx in canonical URL
+			// Pattern 3: /channel/UCxxxxxx in any URL (less reliable)
 			if (!channelId) {
-				const canonicalMatch = html.match(/\/channel\/(UC[\w-]{22})/);
-				if (canonicalMatch) {
-					channelId = canonicalMatch[1];
+				const channelMatch = html.match(/\/channel\/(UC[\w-]{22})/);
+				if (channelMatch) {
+					channelId = channelMatch[1];
 				}
 			}
 
